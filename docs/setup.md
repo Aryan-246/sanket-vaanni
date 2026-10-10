@@ -198,13 +198,37 @@ adb install -r apps\mobile\android\app\build\outputs\apk\debug\app-debug.apk
 ### Faster local builds
 
 The Gradle config builds all four ABIs (`armeabi-v7a,arm64-v8a,x86,x86_64`),
-which is right for release and slow for iteration. For a local debug build,
-name the one you need:
+which is right for release and slow for iteration. To build fewer:
 
 ```powershell
-.\gradlew.bat assembleDebug -PreactNativeArchitectures=x86_64    # emulator
-.\gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a # most modern phones
+.\gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a,x86_64
 ```
+
+> ⚠️ **`-PreactNativeArchitectures` replaces the ABI list — it does not add to
+> it.** Naming one ABI gives you an APK that only runs on that one ABI:
+>
+> ```powershell
+> # Emulator-only APK. WILL FAIL on a physical phone:
+> .\gradlew.bat assembleDebug -PreactNativeArchitectures=x86_64
+> #   INSTALL_FAILED_NO_MATCHING_ABIS: Failed to extract native libraries, res=-113
+> ```
+>
+> `arm64-v8a` is the right choice for almost every physical phone (including
+> 64-bit devices that also list `armeabi-v7a`); `x86_64` is the desktop
+> emulator. Keep both to cover phone and emulator from one APK.
+
+There is no `abiFilters` or `splits` block in `app/build.gradle` — the ABI set
+comes solely from `reactNativeArchitectures` in `android/gradle.properties`,
+which the React Native Gradle Plugin turns into `ndk.abiFilters`.
+
+Check what an APK actually contains before shipping it anywhere:
+
+```powershell
+unzip -l app-debug.apk | Select-String "lib/"
+```
+
+Every directory under `lib/` is an ABI the APK can run on. One directory means
+one supported ABI.
 
 ### Pointing the app at the backend
 
@@ -299,6 +323,44 @@ Output: `apps\mobile\android\app\build\outputs\apk\release\app-release.apk`
 ---
 
 ## 7. Troubleshooting
+
+**`INSTALL_FAILED_NO_MATCHING_ABIS: Failed to extract native libraries,
+res=-113`** — the APK has no native library for your device's CPU. Almost
+always caused by building with a single-ABI `-PreactNativeArchitectures`.
+Diagnose in three commands:
+
+```powershell
+# 1. What does the phone support?
+adb shell getprop ro.product.cpu.abilist      # e.g. arm64-v8a,armeabi-v7a,armeabi
+
+# 2. What did the APK actually package?
+unzip -l app-debug.apk | Select-String "lib/" # e.g. only lib/x86_64/…
+
+# 3. Rebuild covering both the phone and the emulator
+cd apps\mobile\android
+.\gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a,x86_64
+```
+
+If step 1 lists `arm64-v8a`, build `arm64-v8a`. If the APK shows only
+`lib/x86_64/`, it was built for the emulator alone.
+
+**Red screen: "Unable to load script. Make sure you're running Metro…"** — the
+debug APK loads JS from Metro, so this is expected if Metro is not running or
+the device cannot reach it. Two causes, in order of likelihood:
+
+1. **`adb reverse` was lost.** It is cleared whenever the USB link drops or the
+   device reconnects, and the failure looks identical to Metro being down. If
+   the app worked a moment ago, this is almost certainly it:
+
+   ```powershell
+   adb reverse tcp:8081 tcp:8081
+   adb reverse --list          # must show tcp:8081
+   ```
+
+2. Metro genuinely is not running — start it with `npm start`.
+
+This only affects **debug** builds. A release build has the bundle and assets
+packaged inside the APK and needs no Metro.
 
 **`adb: command not found` / `adb: no devices/emulators found`** — `adb` lives
 in `%LOCALAPPDATA%\Android\Sdk\platform-tools` and is not always on `PATH`.

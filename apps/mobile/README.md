@@ -67,8 +67,27 @@ cd android
 Limit architectures to speed up a local build (the default builds all four):
 
 ```powershell
-.\gradlew.bat assembleDebug -PreactNativeArchitectures=x86_64
+.\gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a,x86_64
 ```
+
+> **This flag replaces the ABI list, it does not add to it.** Passing a single
+> ABI produces an emulator-only APK. Installing one on a physical phone fails
+> with:
+>
+> ```
+> INSTALL_FAILED_NO_MATCHING_ABIS: Failed to extract native libraries, res=-113
+> ```
+>
+> The listed ABIs are the *only* ones packaged under `lib/`. Most phones are
+> `arm64-v8a`; most desktop emulators are `x86_64`. Keep **both** unless you
+> know which single target you are building for. To confirm what you actually
+> built:
+>
+> ```powershell
+> unzip -l app-debug.apk | Select-String "lib/"
+> ```
+>
+> Omit the flag entirely for a universal APK covering all four ABIs.
 
 Release APK:
 
@@ -170,19 +189,38 @@ Guarantees:
 - **Failures degrade to the supplied poster** plus the wordmark, not an error
   or a black screen.
 
-### ⚠️ Known risk: video player on RN 0.87
+### Video player on RN 0.87 — risk resolved by measurement
 
-`react-native-video` v6 (`6.19.3`) documents Old Architecture plus New
-Architecture **via the interop layer**, and its docs state it *"does not support
-Bridgeless Mode"*. RN 0.87 is New-Architecture-by-default and bridgeless
-(`android/gradle.properties` → `newArchEnabled=true`). No published source
-confirms v6 on RN 0.87 specifically.
+**Status: verified working on one physical device. See the caveat below.**
 
-If the intro fails to render on a real device, the maintained path is
-**v7** (`7.0.0-beta.12`, full New Architecture) which additionally requires
-`react-native-nitro-modules`. Because every failure path degrades to the poster
-and continues, a failure here degrades the first-launch experience — it does
-not break the app.
+The concern was real. `react-native-video` v6 (`6.19.3`) documents Old
+Architecture plus New Architecture **via the interop layer**, and its docs state
+it *"does not support Bridgeless Mode"*. RN 0.87 is New-Architecture-by-default
+and bridgeless (`android/gradle.properties` → `newArchEnabled=true`), and v6
+ships no `codegenConfig` and no Fabric component sources — its only view manager
+is a legacy Paper `ReactExoplayerViewManager`. That is why the APK compiling was
+never evidence that playback worked.
+
+It was then measured on real hardware (vivo V2141, arm64-v8a, Android 16 /
+API 36), and **playback works**:
+
+- `ReactNativeJS: Running "SanketVaani" with {"fabric":true}` — Fabric active
+- `MediaCodec` and `BufferQueueProducer` activity — hardware decoder ran
+- Six screenshots across the intro all had **different** hashes — frames were
+  animating, not a static poster
+- `ReactExoplayerView$OnAudioFocusChangedListener` held audio focus with
+  `gain: GAIN`, `loss: none`, `usage=USAGE_MEDIA` — soundtrack played, unmuted
+
+**Caveat: this is one device and one Android version.** The documented
+limitation is a genuine upstream constraint, not a mistake in their docs — it
+simply did not manifest for a straightforward local-file `<Video>` here. Other
+devices, other media, or future RN releases may behave differently.
+
+If it does fail elsewhere, the maintained path is **v7**
+(`7.0.0-beta.12`, full New Architecture), which additionally requires
+`react-native-nitro-modules`. Every failure path still degrades to the poster
+and continues, so a failure degrades the first-launch experience — it does not
+break the app.
 
 ## Known limitations
 

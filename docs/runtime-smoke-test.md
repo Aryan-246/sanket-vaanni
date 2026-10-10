@@ -1,13 +1,33 @@
 # Runtime smoke test
 
-First real run of the app on hardware. Nothing below has been executed yet —
-no device or emulator existed on the machine where milestone 1 was built, so the
-app has been compiled and unit-tested but **never actually run**.
+First real run of the app on hardware.
 
-Treat every line here as unverified until a human runs it and writes down what
-happened. Record actual observed behaviour, including failures. A failed step
-that is written down honestly is worth more than a passing step that was
-assumed.
+## First run — already executed
+
+A first run was performed on a physical device (vivo V2141, arm64-v8a, Android
+16 / API 36) while installing the rebuilt APK. Results, with evidence:
+
+| Area | Outcome | Evidence |
+|---|---|---|
+| Install | **Pass** | `adb install -r` → `Success` |
+| App launch | **Pass** | Process running; no `AndroidRuntime` exception |
+| Intro video | **Pass** | `MediaCodec` active; 6 frames with different hashes |
+| Intro audio | **Pass** | ExoPlayer held audio focus, `gain: GAIN`, `USAGE_MEDIA` |
+| Skip control | **Pass** | Visible in captured frames after playback started |
+| Intro → Home | **Pass** | Home screen reached, intro not replayed |
+| Home screen | **Pass** | Demo Mode badge, 5 flex channels, "Not implemented" |
+| No fabricated sign/confidence | **Pass** | No sign name or percentage rendered |
+| Crash-free | **Pass** | No fatal exceptions in `logcat` |
+
+**Not yet exercised:** the playback-error fallback (§4), rotation, backgrounding,
+battery/heat over time, and TalkBack. Treat the sections below as still open —
+re-run them and fill in the Result columns.
+
+---
+
+Treat every step below as unverified unless the table above says otherwise.
+Record actual observed behaviour, including failures. A failed step that is
+written down honestly is worth more than a passing step that was assumed.
 
 ---
 

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A deliberately empty drawable, used as the Android 12+ splash-screen icon.
+
+  On API 31 and above the platform draws its own splash screen before the
+  activity window: a solid colour with a centred icon. The colour can only be a
+  colour (`windowSplashScreenBackground` takes no drawable), so the poster
+  cannot be shown during that phase — but the *icon* can be suppressed, and it
+  has to be, because the default is the launcher icon drawn dead centre over the
+  poster that appears immediately afterwards. An app icon floating on top of the
+  brand artwork reads as a glitch.
+
+  With this as the icon the splash is plain black, matching the poster's own
+  letterbox, and it hands over to `sanket_launch_window` without the icon
+  jumping in and out. The residual black is the OS-mandated splash phase, which
+  is a platform limitation rather than something the app can style away.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="1dp"
+    android:height="1dp"
+    android:viewportWidth="1"
+    android:viewportHeight="1" />

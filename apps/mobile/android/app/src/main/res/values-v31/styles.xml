@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12 (API 31) and above draws a mandatory splash screen before the
+  activity window. It is styled from the activity theme, so these items are a
+  v31 overlay on `AppTheme` rather than additions to the base theme.
+
+  Inheriting from `AppTheme.Base` is required, not stylistic: a style in a
+  qualified folder replaces the unqualified one entirely. See values/styles.xml.
+
+  Neither item changes what the app renders; they stop the platform's own splash
+  from fighting the launch poster:
+
+   - `windowSplashScreenBackground` is pinned to the same black as the poster's
+     letterbox. Left unset it derives from `windowBackground`, which is now a
+     layer-list rather than a colour and is not a valid splash colour.
+   - `windowSplashScreenAnimatedIcon` is emptied, so the launcher icon is not
+     drawn over the brand artwork. Rationale in
+     res/drawable/sanket_launch_icon_transparent.xml.
+
+  The splash phase itself cannot carry artwork — the background attribute takes
+  a colour, not a drawable — so a brief black frame on API 31+ is a platform
+  limitation. It is measured and reported rather than hidden.
+-->
+<resources>
+    <style name="AppTheme" parent="AppTheme.Base">
+        <item name="android:windowSplashScreenBackground">@color/sanket_launch_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/sanket_launch_icon_transparent</item>
+    </style>
+</resources>

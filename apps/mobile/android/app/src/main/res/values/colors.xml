@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Launch background.
+
+      Pure black, matching the intro clip's own background exactly. On a fresh
+      launch the user sees the intro first, so this colour is what sits behind
+      the Android launch window before React Native has drawn anything. Matching
+      it means the hand-off from the native launch window to the first JS frame
+      is invisible instead of a flicker.
+
+      Why this exists at all: without an explicit windowBackground, this theme
+      inherits `?android:attr/colorBackground` through Theme.AppCompat.DayNight,
+      which follows the system light/dark setting. On a device in light mode
+      that is *white* — so the app used to open with a white flash, and on a
+      dark-mode device with an unbranded near-black panel. Either way the window
+      said nothing, and on a slow cold start it lingered for seconds. Pinning it
+      removes both problems and cannot be wrong regardless of system theme.
+
+      Home uses #050506 (near-black, to avoid OLED smear), but black is correct
+      here: this background is only visible on a launch that is about to show
+      the intro, whose own background is #000000.
+    -->
+    <color name="sanket_launch_background">#FF000000</color>
+</resources>

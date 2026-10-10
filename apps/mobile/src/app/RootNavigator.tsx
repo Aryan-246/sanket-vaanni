@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { AccessibilityInfo, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo } from 'react-native';
 
-import { AppStateProvider, useAppState } from './AppState';
+import { AppStateProvider } from './AppState';
+import { sessionIntro, type IntroSession } from './launchSession';
 import { HomeScreen } from '../screens/HomeScreen';
 import { IntroScreen } from '../screens/IntroScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
-import { colors } from '../theme';
 
 /**
  * Route set.
@@ -17,63 +17,78 @@ import { colors } from '../theme';
  * `docs/architecture.md` records the intent to introduce React Navigation when
  * a third real destination appears.
  */
-type Route = 'loading' | 'intro' | 'home' | 'settings';
+type Route = 'intro' | 'home' | 'settings';
 
-export function RootNavigator(): React.JSX.Element {
-  const { storage } = useAppState();
-  const [route, setRoute] = useState<Route>('loading');
+export interface RootNavigatorProps {
+  /**
+   * Injected by tests to get an isolated session per case. The app always uses
+   * the process-lifetime singleton — see `launchSession.ts`.
+   */
+  introSession?: IntroSession;
+}
 
-  // Decide the first screen exactly once, on mount.
+export function RootNavigator({
+  introSession = sessionIntro,
+}: RootNavigatorProps): React.JSX.Element {
+  /**
+   * Decided once, synchronously, from process-lifetime state.
+   *
+   * There is deliberately no `loading` route. The previous implementation
+   * awaited AsyncStorage and `isReduceMotionEnabled` before choosing, which
+   * meant React mounted an empty black view first — a guaranteed blank frame
+   * on every launch, and the start of the black gap this replaces. Both values
+   * are now resolved without blocking the first render.
+   */
+  const [route, setRoute] = useState<Route>(() =>
+    introSession.shouldPlayIntro() ? 'intro' : 'home',
+  );
+
+  /** Idempotent hand-off: whichever path fires first wins. */
+  const finishIntro = useCallback(() => {
+    introSession.markIntroPlayed();
+    setRoute('home');
+  }, [introSession]);
+
+  /**
+   * Honour the system "reduce motion" setting.
+   *
+   * The intro is a decorative animation, so a user who has asked for reduced
+   * motion should not be made to sit through it. This is checked *after* the
+   * first render rather than before it, so it never delays the first frame —
+   * the worst case is one black frame instead of a blank loading screen.
+   *
+   * `shouldPlayIntro()` guards against a deliberate replay from Settings: once
+   * the launch intro has been marked played, this no longer short-circuits, so
+   * the user who explicitly asked to watch it gets to watch it.
+   */
   useEffect(() => {
+    if (route !== 'intro') return;
     let cancelled = false;
 
-    async function decideInitialRoute(): Promise<void> {
-      let seen = false;
-      let reduceMotion = false;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((reduceMotion) => {
+        if (!cancelled && reduceMotion && introSession.shouldPlayIntro()) {
+          finishIntro();
+        }
+      })
+      .catch(() => undefined);
 
-      try {
-        seen = await storage.isIntroSeen();
-      } catch {
-        // Storage being unavailable must not block launch. Treat it as
-        // "already seen" so the user is not shown the intro on every start.
-        seen = true;
-      }
-
-      try {
-        // The intro is a decorative animation. A user who has asked the system
-        // to reduce motion should not be made to sit through it.
-        reduceMotion = await AccessibilityInfo.isReduceMotionEnabled();
-      } catch {
-        reduceMotion = false;
-      }
-
-      if (cancelled) return;
-      setRoute(seen || reduceMotion ? 'home' : 'intro');
-    }
-
-    decideInitialRoute().catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [storage]);
+  }, [route, finishIntro, introSession]);
 
-  const handleIntroComplete = useCallback(() => {
-    setRoute('home');
-    // Persist after navigating: a storage failure must not delay the hand-off.
-    storage.setIntroSeen(true).catch(() => undefined);
-  }, [storage]);
-
-  const handleReplayIntro = useCallback(() => setRoute('intro'), []);
   const handleOpenSettings = useCallback(() => setRoute('settings'), []);
   const handleCloseSettings = useCallback(() => setRoute('home'), []);
 
-  if (route === 'loading') {
-    // Same background as the app, so the first frame is not a white flash.
-    return <View style={styles.splash} />;
-  }
+  /**
+   * Replay is an explicit user action, so it bypasses the session gate
+   * entirely — including on a launch where the intro already played.
+   */
+  const handleReplayIntro = useCallback(() => setRoute('intro'), []);
 
   if (route === 'intro') {
-    return <IntroScreen onComplete={handleIntroComplete} />;
+    return <IntroScreen onComplete={finishIntro} />;
   }
 
   if (route === 'settings') {
@@ -83,11 +98,6 @@ export function RootNavigator(): React.JSX.Element {
   return <HomeScreen onOpenSettings={handleOpenSettings} />;
 }
 
-export interface AppProps {
-  /** Injected by tests. */
-  children?: never;
-}
-
 export function App(): React.JSX.Element {
   return (
     <AppStateProvider>
@@ -95,10 +105,3 @@ export function App(): React.JSX.Element {
     </AppStateProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  splash: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-});

@@ -18,18 +18,6 @@ function entry(n: number): HistoryEntry {
   };
 }
 
-describe('intro flag', () => {
-  it('defaults to not seen', async () => {
-    expect(await createInMemoryStorage().isIntroSeen()).toBe(false);
-  });
-
-  it('round-trips', async () => {
-    const storage = createInMemoryStorage();
-    await storage.setIntroSeen(true);
-    expect(await storage.isIntroSeen()).toBe(true);
-  });
-});
-
 describe('selected profile', () => {
   it('defaults to null', async () => {
     expect(await createInMemoryStorage().getSelectedProfileId()).toBeNull();

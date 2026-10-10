@@ -12,9 +12,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { CalibrationProfile } from '../sensors/calibration';
 
-/** Versioned key namespace. Bump the version to invalidate old payloads. */
+/**
+ * Versioned key namespace. Bump the version to invalidate old payloads.
+ *
+ * Note what is deliberately absent: there is no "intro seen" key. Whether the
+ * intro plays is decided by process lifetime, not by persisted state — see
+ * `../app/launchSession.ts` for why a stored flag cannot express "this launch"
+ * and permanently suppresses the intro once set.
+ */
 const KEYS = {
-  introSeen: 'sv/v1/intro-seen',
   selectedProfile: 'sv/v1/selected-profile',
   calibration: (side: string) => `sv/v1/calibration/${side}`,
   history: 'sv/v1/history',
@@ -40,8 +46,6 @@ export interface HistoryEntry {
 export const HISTORY_LIMIT = 200;
 
 export interface Storage {
-  isIntroSeen(): Promise<boolean>;
-  setIntroSeen(seen: boolean): Promise<void>;
   getSelectedProfileId(): Promise<string | null>;
   setSelectedProfileId(profileId: string): Promise<void>;
   getCalibration(side: string): Promise<CalibrationProfile | null>;
@@ -64,13 +68,6 @@ function parseJson<T>(raw: string | null): T | null {
 
 export function createAsyncStorage(): Storage {
   return {
-    async isIntroSeen() {
-      return (await AsyncStorage.getItem(KEYS.introSeen)) === 'true';
-    },
-    async setIntroSeen(seen) {
-      await AsyncStorage.setItem(KEYS.introSeen, seen ? 'true' : 'false');
-    },
-
     async getSelectedProfileId() {
       return AsyncStorage.getItem(KEYS.selectedProfile);
     },
@@ -114,12 +111,6 @@ export function createInMemoryStorage(): Storage {
   const read = (key: string): string | null => map.get(key) ?? null;
 
   return {
-    async isIntroSeen() {
-      return read(KEYS.introSeen) === 'true';
-    },
-    async setIntroSeen(seen) {
-      map.set(KEYS.introSeen, seen ? 'true' : 'false');
-    },
     async getSelectedProfileId() {
       return read(KEYS.selectedProfile);
     },

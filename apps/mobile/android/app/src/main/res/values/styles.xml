@@ -1,9 +1,35 @@
 <resources>
 
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!--
+      Every item of the app theme, in one place.
+
+      `AppTheme` itself is an empty shell that inherits from this, because a
+      style declared in a qualified folder (`values-v31`) *replaces* the
+      unqualified one wholesale rather than merging into it. Without the
+      split, the Android 12+ splash items below would have to be duplicated
+      here, and any item added here later would silently disappear on modern
+      devices. See values-v31/styles.xml.
+    -->
+    <style name="AppTheme.Base" parent="Theme.AppCompat.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+
+        <!--
+          Shown by Android in the launch window, before React Native has
+          created any view. Without this the theme inherits the DayNight
+          colorBackground, which is white in light mode and an unbranded
+          near-black in dark mode — the source of the blank panel the user
+          sees for the first seconds of a cold start.
+
+          Now the supplied splash poster over black rather than a flat colour,
+          so the window that covers React Native's initialisation carries the
+          brand instead of being empty. See res/drawable/sanket_launch_window.xml
+          for the layer list and res/values/colors.xml for the black.
+        -->
+        <item name="android:windowBackground">@drawable/sanket_launch_window</item>
     </style>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="AppTheme.Base" />
 
 </resources>

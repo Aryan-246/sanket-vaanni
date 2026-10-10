@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Android launch window, painted before React Native has drawn anything.
+
+  Two layers:
+
+   1. `sanket_launch_background` — pure black, matching the intro clip's own
+      background. This is the letterbox, and it is also what shows on the part
+      of the window the poster does not cover.
+   2. The supplied splash poster, centred and **unscaled**.
+
+  Why `gravity="center"` and not `fill` or a stretched `scaleType`:
+
+  The poster is 1080x1920 (9:16) but phones are taller — this device is
+  1080x2400 (20:9). `fill` would stretch the artwork vertically by a quarter and
+  visibly deform the ring and the संकेत वाणी wordmark. `center` draws it at its
+  native size, centred, letterboxed against the black layer — which is exactly
+  what `IntroScreen` paints with `<Image resizeMode="contain">` over the same
+  black. On this device the two are pixel-identical, so the hand-off from the
+  launch window to the first React Native frame is invisible.
+
+  Trade-off, stated honestly: on a display narrower than 1080 px `center` crops
+  rather than scales, so a small device would see the middle of the poster. It
+  is still branded artwork over black rather than an empty panel, which is the
+  failure this replaces. Making it scale would require a per-density copy of the
+  PNG, i.e. re-encoding the supplied asset, which is out of scope.
+
+  The bitmap lives in `drawable-nodpi` deliberately. In a density bucket Android
+  would treat a 1080x1920 PNG as mdpi artwork and scale it up ~3x on this
+  handset, which is the classic launch-poster blur.
+
+  See res/values/styles.xml for where this is applied, and res/values/colors.xml
+  for why the black is #000000 rather than Home's #050506.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/sanket_launch_background" />
+    <item>
+        <bitmap
+            android:src="@drawable/sanket_launch_poster"
+            android:gravity="center" />
+    </item>
+</layer-list>

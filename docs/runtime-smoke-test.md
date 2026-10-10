@@ -4,8 +4,15 @@ First real run of the app on hardware.
 
 ## First run — already executed
 
-A first run was performed on a physical device (vivo V2141, arm64-v8a, Android
-16 / API 36) while installing the rebuilt APK. Results, with evidence:
+A first run was performed on a physical device (vivo V2141, arm64-v8a,
+**Android 14 / API 34**) while installing the rebuilt APK. Results, with
+evidence:
+
+> **Correction.** Earlier revisions of this file said "Android 16 / API 36".
+> That was wrong. `adb shell getprop ro.build.version.sdk` returns **34** and
+> `ro.build.version.release` returns **14**. A second, more thorough run was
+> made later on the same handset; its results are recorded in
+> "Second run — intro and startup" near the end of this file.
 
 | Area | Outcome | Evidence |
 |---|---|---|
@@ -94,12 +101,12 @@ So: the APK compiling proves nothing about playback. It must be observed.
 | 2.3 | Is there audio? | Soundtrack plays, unmuted | |
 | 2.4 | Do the loading dots animate? | Movement visible | |
 | 2.5 | Does it play to the end and enter the app? | Home screen appears | |
-| 2.6 | Total duration | Intro is ~13 s; app enters within 15 s | |
+| 2.6 | Total duration | Clip is **6.467 s**; app enters within ~10 s | |
 
 **If 2.1 fails** (black screen, no video, or a crash), that is the known
 bridgeless risk and it is a real finding — record it with the `smoke.log` lines.
 The app is designed to survive it: after the watchdog the poster appears and the
-app continues. Confirm §3 then decides the fix (see §8, Option B).
+app continues. Confirm §3 then decides the fix (see §8, risk A).
 
 ## 3. Skip control
 
@@ -155,10 +162,21 @@ and a milestone-1 regression.
 | 6.2 | Replay intro from Settings | Intro plays again | |
 | 6.3 | Finish it | Returns to Home, does **not** loop the intro | |
 | 6.4 | Hardware back button | Behaves sensibly from each screen; no dead ends | |
-| 6.5 | Relaunch the app | Goes **straight to Home** — intro is not replayed | |
-| 6.6 | Relaunch after 6.1–6.3 | Same: Home, not intro | |
+| 6.5 | Press Home, then return to the app | Back where you were — intro is **not** replayed | |
+| 6.6 | Dismiss from Recents, then launch | Intro **plays again** | |
+| 6.7 | Force-stop, then launch | Intro **plays again** | |
 
-6.5 is the "plays once on first launch" requirement.
+6.5–6.7 together are the launch-gating requirement, and the distinction is the
+whole specification: the intro is keyed on the lifetime of the JavaScript
+context (`src/app/launchSession.ts`), not on a persisted `hasSeenIntro` flag.
+Pressing Home keeps the process alive, so coming back does not restart the
+intro. Dismissing from Recents and force-stopping both destroy the process, so
+the intro plays again.
+
+An earlier revision of this checklist said a relaunch "goes **straight to
+Home** — intro is not replayed". That was the opposite of the requirement, and
+it described the bug the gating module exists to fix: with a persisted flag the
+intro disappears permanently after one run.
 
 ## 7. Crash-free exit and lifecycle
 
@@ -169,12 +187,15 @@ and a milestone-1 regression.
 | 7.3 | Force-stop and relaunch | Clean start | |
 | 7.4 | Exit via back from Home | No crash, no ANR | |
 | 7.5 | Check the log | No unhandled `AndroidRuntime` exceptions | |
-| 7.6 | App size on device | ~44 MB APK; install is unremarkable | |
+| 7.6 | App size on device | Release **40.3 MB**; debug **132.5 MB** (it packages all four ABIs). Measured, not estimated | |
 
 ## 8. Known risks ranked
 
 **A. Intro video under bridgeless (highest).** Documented incompatibility; see §2.
-Not yet observed either way.
+**Observed working** on the target handset — see "Second run" below. The
+incompatibility is real and upstream, but it did not manifest for a
+straightforward local-file `<Video>` here. Other devices, other media and future
+RN releases may differ.
 
 **B. GIF-style smoothness of the intro.** Only a concern if 2.1 passes but looks
 wrong — that would be a decoding/performance issue, not a compatibility one.
@@ -193,7 +214,85 @@ If **A** fails, the options are, in order of preference:
 Do not start any of these until the failure is actually observed and the log
 confirms the cause.
 
-## 9. Recording results
+## Second run — intro and startup
+
+A focused run on the intro and launch experience. Same handset.
+
+**Device and build, read rather than assumed:**
+
+| Fact | Value |
+|---|---|
+| Device | vivo V2141, `ro.product.cpu.abilist=arm64-v8a,armeabi-v7a,armeabi` |
+| Android | **14 / API 34** (`ro.build.version.sdk=34`) |
+| Build | `assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64` |
+| APK | 40,332,130 bytes, sha256 `69db35a6…831dd8a8b2` — hashed back off the device to confirm the installed copy matches |
+
+**The intro asset is the supplied original, unmodified.** Verified by hash
+against the kit: video `cce5afa6…`, poster `0c5f9e00…`. The clip is 1080×1920
+H.264 (`avc1`), 97 frames at 15.0 fps, **6.467 s**, 2,344,975 bytes (~2901 kbps);
+audio AAC (`mp4a`) 44100 Hz. It is packaged as `res/fr.mp4` and is genuinely
+local — in release `Image.resolveAssetSource` returns a *resource name*
+(`src_assets_intro_sanketvaaniintro`), not a URL, so nothing is fetched at
+runtime.
+
+**Playback callbacks, in order, from `adb logcat` (tag `ReactNativeJS`):**
+
+```
+readyForDisplay                       ← ExoPlayer STATE_READY: prepared, not painted
+load { durationSec: 6.467 … }
+playback started { currentTime: 0.089 }   ← playhead moving, ~250 ms after load
+revealing video                           ← poster dissolve begins
+```
+
+**Observed on screen**, by phase-staggered screenshots (on-device `screencap`
+costs ~780 ms, so repeated cold launches are staggered to sample the window):
+
+| Approx. time | Screen |
+|---|---|
+| 0.6 s | launcher's own window-open animation — not the app |
+| 0.8–1.5 s | **branded splash poster** over black, correctly letterboxed |
+| ~2.1 s | mid-crossfade: poster dimming, video content appearing beneath |
+| ~3 s onward | video playing; Skip revealed |
+
+No black frame at any sampled point, and status/navigation bars were hidden for
+the cinematic and restored on entering Home.
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | Cold launch from the icon → intro | **Pass** |
+| 2 | Skip → Home exactly once | **Pass** |
+| 3 | Playback completion → Home exactly once | **Pass** — no fallback fired; Home stable at ~8.5 s and ~12 s |
+| 4 | Settings → Replay intro → Home | **Pass** |
+| 5 | Press Home, return → intro not replayed | **Pass** — task id unchanged (`t6991`) |
+| 6 | Dismiss from Recents, launch → intro plays | **Pass** — task id changed `t6991`→`t6992` |
+| 7 | Force-stop, launch → intro plays | **Pass** |
+| 8 | Playback failure → safe fallback to Home | **Pass, but only under an injected fault** (see below) |
+| 9 | No loop, crash or stuck blank screen | **Pass** on the runs observed — no `FATAL EXCEPTION`, no ANR, one intro per launch |
+
+**Scenario 8 was exercised with a deliberately broken source, not a natural
+failure.** The video source was temporarily pointed at a non-existent asset in a
+throwaway build. `ExoPlaybackException: Source error` →
+`ERROR_CODE_IO_FILE_NOT_FOUND`, the branded poster held, and the app reached Home
+without trapping the user. That build was discarded; the shipped code uses the
+real asset. Because the fault was injected, this is a check of the recovery path,
+**not** an end-to-end natural reproduction.
+
+**Known limitation — media suppressed during a call.** With the phone in a call
+(`Mode: MODE_IN_CALL`, telecom holding `GAIN_TRANSIENT` with `LOCK` on ringtone
+usage, and `muted player piids due to call/ring`), the clip loaded and then sat at
+frame 0: react-native-video pauses the player on audio-focus loss. A bounded
+`PLAYBACK_START_DEADLINE_MS` (2500 ms, armed from `onLoad`) now releases the user
+to the branded poster instead of leaving them on a still frame. **This has not
+been re-verified on the shipping build while a call is actually active** — the
+call ended before that could be measured.
+
+**Not measured: animation smoothness / frame rate.** The evidence above is
+screenshots, which cannot measure frame rate or dropped frames. The changes made
+for playback cost (a memoised player subtree, no `progressUpdateInterval`, no
+per-progress React state) are structural rather than measured, and the original
+"looks rough" symptom is **not** confirmed fixed by measurement.
+
+
 
 Fill in the Result column and keep it with the project. State plainly which
 steps were exercised and which were not reached — a step that was never run is

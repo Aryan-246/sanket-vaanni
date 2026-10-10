@@ -201,8 +201,9 @@ ships no `codegenConfig` and no Fabric component sources — its only view manag
 is a legacy Paper `ReactExoplayerViewManager`. That is why the APK compiling was
 never evidence that playback worked.
 
-It was then measured on real hardware (vivo V2141, arm64-v8a, Android 16 /
-API 36), and **playback works**:
+It was then measured on real hardware (vivo V2141, arm64-v8a, **Android 14 /
+API 34** — read from `ro.build.version.sdk=34`, not assumed; earlier drafts of
+this file said Android 16 / API 36, which was wrong), and **playback works**:
 
 - `ReactNativeJS: Running "SanketVaani" with {"fabric":true}` — Fabric active
 - `MediaCodec` and `BufferQueueProducer` activity — hardware decoder ran

@@ -1,0 +1,316 @@
+# Setup
+
+Exact, copy-pasteable commands for Windows PowerShell. Every command below was
+run on this machine; versions are the ones actually verified, not guesses.
+
+The two applications are **independent**. You do not need the backend to run the
+mobile app, and you do not need the mobile app to run the backend.
+
+---
+
+## 1. Prerequisites
+
+| Tool | Verified version | Why |
+|---|---|---|
+| Node.js | 24.16.0 | Both apps. `>= 22.11` required for `--env-file-if-exists`. |
+| npm | 11.x | Ships with Node. |
+| Git | 2.x | Version control. |
+| JDK | 17 (Temurin 17.0.20) | Android Gradle Plugin 8.x rejects JDK 8 and warns on 21+. |
+| Android SDK | platform 36, build-tools 36.0.0 | Required only to build/run the mobile app. |
+
+Check what you have:
+
+```powershell
+node --version
+npm --version
+git --version
+java -version              # must report 17.x
+echo $env:JAVA_HOME        # must point at the JDK 17 folder
+```
+
+If `java -version` reports anything other than 17, set it for the session:
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+```
+
+> Do not change machine-wide environment variables for this project unless you
+> intend to. The session-scoped form above is enough to build.
+
+### Android SDK
+
+Check first:
+
+```powershell
+echo $env:ANDROID_HOME
+adb version
+```
+
+If those are empty, install the SDK through Android Studio, or set the path for
+the session:
+
+```powershell
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+$env:Path = "$env:ANDROID_HOME\platform-tools;$env:ANDROID_HOME\emulator;$env:Path"
+```
+
+Alternatively — and this is what this repo does, because `ANDROID_HOME` is not
+set machine-wide here — create `apps\mobile\android\local.properties`:
+
+```properties
+sdk.dir=C:/Users/<you>/AppData/Local/Android/Sdk
+```
+
+**Use forward slashes.** A `.properties` file treats `\` as an escape character,
+so writing the natural Windows form `sdk.dir=C:\Users\<you>\AppData\Local\Android\Sdk`
+makes Java read `\U`, `\A`, `\L` and `\S` as invalid escapes, and Gradle fails
+during configuration with:
+
+```
+java.io.IOException: The filename, directory name, or volume label syntax is incorrect
+  at com.android.build.gradle.internal.SdkLocator$SdkLocationSource.validateSdkPath(SdkLocator.kt:216)
+```
+
+`C\:\\Users\\<you>\\AppData\\Local\\Android\\Sdk` is the escaped equivalent and
+also works; forward slashes are just harder to get wrong.
+
+That file is gitignored and machine-specific. Never commit it.
+
+---
+
+## 2. Clone and install
+
+```powershell
+git clone <repository-url> "SANKET VAANNI"
+cd "SANKET VAANNI"
+```
+
+There is **no root workspace tool** and no root `npm install`. `package.json`
+exists only inside each app, deliberately — so neither app can break the other's
+build. Install each separately:
+
+```powershell
+cd apps\mobile
+npm install
+
+cd ..\..\apps\backend
+npm install
+```
+
+---
+
+## 3. Run the backend
+
+```powershell
+cd apps\backend
+Copy-Item .env.example .env      # first time only
+npm run dev
+```
+
+Expected output — the service is listening on port 4000:
+
+```
+{"level":30,...,"msg":"server listening on 0.0.0.0:4000"}
+```
+
+Verify from a second terminal:
+
+```powershell
+curl.exe http://127.0.0.1:4000/health
+```
+
+Expected:
+
+```json
+{"status":"ok","service":"sanket-vaanni-backend","version":"0.1.0", ...}
+```
+
+Production-style run (compiled, no watcher):
+
+```powershell
+npm run build
+npm start
+```
+
+To reach the backend from a **physical phone** on the same Wi-Fi, bind all
+interfaces:
+
+```powershell
+$env:HOST = "0.0.0.0"
+npm run dev
+```
+
+Then set `API_BASE_URL` in the mobile app to `http://<your-PC-LAN-IP>:4000`
+(`ipconfig` → IPv4 Address), and allow Node through the Windows firewall for
+private networks.
+
+---
+
+## 4. Run the mobile app
+
+```powershell
+cd apps\mobile
+Copy-Item .env.example .env      # first time only — optional
+```
+
+Start Metro in one terminal:
+
+```powershell
+npm start
+```
+
+In a second terminal, with an emulator running or a device connected over USB
+(USB debugging enabled, `adb devices` shows it):
+
+```powershell
+npm run android
+```
+
+Nothing to install it on? Build the APK only:
+
+```powershell
+cd apps\mobile\android
+.\gradlew.bat assembleDebug
+```
+
+First build downloads Gradle 9.4.1 and the Android Gradle Plugin — expect
+several minutes. Later builds are much faster.
+
+The debug APK lands at:
+
+```
+apps\mobile\android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+Install it manually with:
+
+```powershell
+adb install -r apps\mobile\android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+### Faster local builds
+
+The Gradle config builds all four ABIs (`armeabi-v7a,arm64-v8a,x86,x86_64`),
+which is right for release and slow for iteration. For a local debug build,
+name the one you need:
+
+```powershell
+.\gradlew.bat assembleDebug -PreactNativeArchitectures=x86_64    # emulator
+.\gradlew.bat assembleDebug -PreactNativeArchitectures=arm64-v8a # most modern phones
+```
+
+### Pointing the app at the backend
+
+Edit `apps\mobile\.env`:
+
+```properties
+API_BASE_URL=http://10.0.2.2:4000
+```
+
+`10.0.2.2` is the Android emulator's alias for the host machine's loopback.
+Restart Metro with a cleared cache after changing it:
+
+```powershell
+npm start -- --reset-cache
+```
+
+This is configuration, not code. No source change is needed to retarget the app
+at a different backend, and the app works fully offline regardless.
+
+---
+
+## 5. Tests, types and lint
+
+Each app is checked independently.
+
+Backend:
+
+```powershell
+cd apps\backend
+npm test
+npm run typecheck
+npm run build
+```
+
+Mobile:
+
+```powershell
+cd apps\mobile
+npm test
+npm run typecheck
+npm run lint
+```
+
+Mobile tests run on Jest with `react-test-renderer`. They do **not** need an
+emulator, the Android SDK, or a network connection.
+
+---
+
+## 6. Release build
+
+A release build will not produce a shippable artifact until it is signed. The
+scaffold reuses the debug keystore for `release`, which is fine for local
+testing and **not acceptable for distribution**.
+
+Generate a keystore:
+
+```powershell
+keytool -genkeypair -v `
+  -keystore sanket-vaanni-release.keystore `
+  -alias sanket-vaanni `
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+
+`keytool` prompts for the password and identity details interactively. Store the
+keystore outside the repository and record the password in your own password
+manager — **never in a file in this repo.**
+
+Point Gradle at it through `~/.gradle/gradle.properties` (outside the repo, so
+secrets never enter version control):
+
+```properties
+SANKET_VAANNI_UPLOAD_STORE_FILE=C:/keys/sanket-vaanni-release.keystore
+SANKET_VAANNI_UPLOAD_KEY_ALIAS=sanket-vaanni
+SANKET_VAANNI_UPLOAD_STORE_PASSWORD=********
+SANKET_VAANNI_UPLOAD_KEY_PASSWORD=********
+```
+
+Then wire a `signingConfigs.release` block into `apps\mobile\android\app\build.gradle`
+reading those properties, and build:
+
+```powershell
+cd apps\mobile\android
+.\gradlew.bat assembleRelease
+```
+
+Output: `apps\mobile\android\app\build\outputs\apk\release\app-release.apk`
+
+> Not done in this milestone. Producing a signed, distributable APK is a
+> deliberate later step — no keystore exists yet, and creating one is a
+> decision for the project owner, not the build.
+
+---
+
+## 7. Troubleshooting
+
+**`SDK location not found`** — `ANDROID_HOME` is unset and
+`android\local.properties` is missing. See §1.
+
+**`Unsupported class file major version` / Gradle Java errors** — Gradle is
+picking up the wrong JDK. Confirm `java -version` reports 17 and that
+`JAVA_HOME` points at it, then re-run. Add `org.gradle.java.home=<jdk17 path>`
+to `android\gradle.properties` to pin it permanently.
+
+**Metro serves a stale bundle** — `npm start -- --reset-cache`.
+
+**`adb: no devices/emulators found`** — start an emulator from Android Studio's
+Device Manager, or check the USB cable and that USB debugging is enabled.
+
+**Port 4000 already in use** — change `PORT` in `apps\backend\.env`. Backend and
+mobile are independent, so this cannot affect the app.
+
+**Intro video does not play on device** — a known, documented risk. See the
+"Known risk" section of `apps\mobile\README.md`. Every failure path falls back
+to the supplied poster and continues into the app; the intro can never block
+startup.

@@ -1,0 +1,21 @@
+.sv-intro {
+  position: fixed; inset: 0; z-index: 99999;
+  display: grid; place-items: center; overflow: hidden; background: #000;
+}
+.sv-intro__video {
+  display: block; width: 100%; height: 100%; max-width: 100vw; max-height: 100dvh;
+  object-fit: contain; object-position: center; background: #000;
+}
+.sv-intro__sound {
+  position: absolute; right: max(18px, env(safe-area-inset-right));
+  bottom: max(22px, env(safe-area-inset-bottom)); z-index: 2;
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid rgba(255,255,255,.55); border-radius: 999px;
+  padding: 10px 15px; color: #fff; background: rgba(0,0,0,.72);
+  font: 500 12px/1.2 system-ui, sans-serif; letter-spacing: .08em;
+  text-transform: uppercase; cursor: pointer; backdrop-filter: blur(8px);
+}
+.sv-intro__sound:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .sv-intro__video { object-fit: contain; }
+}

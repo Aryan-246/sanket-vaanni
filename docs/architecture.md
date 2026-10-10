@@ -68,6 +68,37 @@ The `ble/transport` module is an **interface**, not an implementation. Real BLE
 is one implementation; the mock is another. This is what lets the entire UI and
 data-flow be built and tested before the firmware protocol is confirmed.
 
+## Navigation and theming (mobile)
+
+There is no navigation library. `app/RootNavigator` is a state machine with two
+routes — `intro` and `tabs` — and four tab keys: `dashboard`, `oled`, `audit`,
+`more`. Two reasons: the app has exactly four destinations that never need deep
+links, and a router dependency would have to be verified against React Native
+0.87.1 on the New Architecture before it could be adopted at all.
+
+**Only the active destination is mounted.** This is a performance decision with
+a test behind it (`__tests__/launch-flow.test.tsx` asserts it): four mounted
+screens would keep the Dashboard's sensor subscription re-rendering while the
+user reads the audit. It also means each screen's cleanup path runs on every tab
+change rather than only at app exit.
+
+The theme is a **preference**, not a platform setting. `theme/ThemeProvider`
+holds the resolved scheme, `app/preferences.ts` holds the stored choice, and the
+`StatusBar` belongs to the themed root rather than to `App.tsx` so that it
+changes when the theme does. Dark is the default, deliberately: it is what the
+first frame renders before storage has been read, so the default and the
+pre-mount background agree and there is no flash.
+
+### Which hand the app is talking about
+
+The Dashboard has a **single** selector choosing the hand that the recognition
+panel, the hand viewer and the sensor list are all showing. Two independent
+selectors would let a user read the left hand's pose next to the right hand's
+recognition result without noticing, which is exactly the confusion this app
+cannot afford. Both gloves' *connection* state is always visible regardless of
+the selection; the selector chooses what is **displayed**, never what is
+**connected**.
+
 ## Language profiles
 
 `recognition` is parameterised by a **language profile** rather than hardcoding
@@ -101,6 +132,12 @@ Following the brief, the following are **not** built yet, and are documented in
 - No cloud hosting, CI/CD or analytics.
 - No real BLE integration — the protocol is unverified.
 - No gesture recognition model — the vocabulary does not exist yet.
+- No navigation library — see *Navigation and theming* above.
+- No 3D hand renderer — see [`hand-viewer.md`](hand-viewer.md).
+- No account, login or profile of any kind. No screen offers one, and no
+  credential is stored. The architecture leaves room for server-side
+  authentication later by keeping `storage` and the API client separate from the
+  UI; it does not anticipate it with a stub.
 
 These are omissions, not oversights. Each is gated on a requirement that does
 not yet exist.

@@ -54,6 +54,33 @@ merged.**
 Swapping in the real transport later must not require UI changes. That
 constraint is the reason the interface exists.
 
+### Left and right are two independent links
+
+The Dashboard models each glove as its own link with its own state, and never
+infers one from the other. The left glove can be connected while the right is
+disconnected, scanning, connecting or unavailable, and the UI shows both at
+once.
+
+What is **not** known is how the two gloves are told apart on the wire — item 9
+above. Nothing in the app assumes an answer, and the current code is written so
+that it cannot:
+
+- The side is never derived from an attribute of the device. A device id learned
+  from a scan is associated with the `side` of the controller the user acted on
+  (`ble/controller.ts`), not with a side read from an advertised name, service
+  data, address or connection order.
+- Incoming frames are discarded unless their `side` matches the controller's
+  (`raw.side !== this.side`), so a transport that mislabels frames cannot
+  cross-feed the other hand.
+- `MockTransport` does use the ids `demo-left` and `demo-right`. Those are
+  simulator bookkeeping only. They are **not** a claim about advertising names,
+  advertising payloads, or any firmware convention, and must not be copied into
+  a real transport.
+
+Until item 9 is answered from the firmware, no code may assign a side on its
+own. If the two gloves turn out to be a single dual-connected device, that is a
+change to this model and needs to be made deliberately rather than absorbed.
+
 ## Proposed transport interface (language-agnostic)
 
 The shape below is a design decision the app already depends on. It is

@@ -80,3 +80,18 @@ npm run lint
 Stated plainly so no reader assumes otherwise: there is no BLE test, no
 recognition test, no accuracy test, and no load test in this milestone. The
 hardware is not present and the protocol is not verified.
+
+## Performance and asset verification records
+
+Some claims cannot be made by a test suite and cannot be made by inspection
+either. They are recorded separately, with their method and their gaps:
+
+- [`intro-performance.md`](intro-performance.md) — the intro's measured
+  frame/decode evidence, the audio-focus root cause, and an explicit list of what
+  could not be measured. Read the limitations before quoting the numbers.
+- [`hand-viewer.md`](hand-viewer.md) — why the supplied 3D reference model could
+  not be used, and what integration boundary was built in its place.
+
+The rule for both: **a number measured under one set of conditions is reported
+with those conditions**, and a metric that could not be obtained is reported as
+missing rather than estimated.

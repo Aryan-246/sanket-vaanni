@@ -8,12 +8,24 @@ import Video, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText } from '../components/AppText';
-import { colors, MIN_TOUCH_TARGET, radii, spacing } from '../theme';
+import { MIN_TOUCH_TARGET, radii, spacing } from '../theme';
 
 // Bundled originals, copied unmodified from the supplied intro kit.
 // Regenerating or re-encoding these is not permitted — see the kit README.
 const INTRO_VIDEO = require('../assets/intro/sanket-vaani-intro.mp4');
 const INTRO_POSTER = require('../assets/intro/sanket-vaani-intro-poster.png');
+
+/**
+ * The intro's own text colour.
+ *
+ * Deliberately a literal, and deliberately not a palette token. The intro is a
+ * full-screen cinematic on the clip's own black background, in both themes; the
+ * app's theme has no bearing on it. Reading `palette.textPrimary` here would
+ * turn the skip label near-black on black the moment the user selected the light
+ * theme — which the light theme is perfectly entitled to do, and which would
+ * leave an invisible control over an opaque video.
+ */
+const INTRO_TEXT = '#F5F5F7';
 
 /**
  * Ceiling on how long the *player* is given to begin.
@@ -501,7 +513,7 @@ export function IntroScreen({ onComplete }: IntroScreenProps): React.JSX.Element
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             style={({ pressed }) => [styles.skip, pressed && styles.skipPressed]}
           >
-            <AppText variant="overline" color={colors.textPrimary} overline>
+            <AppText variant="overline" color={INTRO_TEXT} overline>
               Skip
             </AppText>
           </Pressable>

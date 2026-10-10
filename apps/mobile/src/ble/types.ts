@@ -57,6 +57,23 @@ export const MOCK_DEVICE_NAME = '__demo__';
 
 export type Unsubscribe = () => void;
 
+/**
+ * A transport whose data production can be suspended without dropping the
+ * link.
+ *
+ * Distinct from `disconnect()`: the connection stays up and the user keeps
+ * their glove, but no frames are produced while suspended. That is what lets a
+ * backgrounded app stop burning battery without the user returning to find
+ * their glove has been disconnected underneath them.
+ *
+ * Optional, because a real BLE stack may not offer this — the caller checks for
+ * it rather than assuming.
+ */
+export interface SuspendableTransport {
+  pause(): void;
+  resume(): void;
+}
+
 export interface GloveTransport {
   /** Human-readable transport name, for diagnostics and the about screen. */
   readonly name: string;

@@ -2,29 +2,66 @@ import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 
 import { AppText } from './AppText';
-import { colors, radii, spacing } from '../theme';
+import { useStyles, useTheme } from '../theme/ThemeProvider';
+import type { Palette } from '../theme/palette';
+import { radii, spacing } from '../theme';
 
 export interface FlexBarProps {
+  /** Display name, e.g. "Thumb". */
   label: string;
-  /** Normalised 0..1. Values outside the range are clamped for display. */
-  value: number;
+  /**
+   * Calibrated bend, 0..1, or null when no reading is available.
+   *
+   * Null is a real state, not an error: an uncalibrated channel or a
+   * disconnected glove has no bend, and rendering that as `0.00` would claim
+   * the finger is extended, which is a measurement we do not have.
+   */
+  calibrated: number | null;
+  /** Raw channel value as reported by the transport, or null. */
+  raw: number | null;
+  /** Right-aligned hint, e.g. the source of the reading. */
+  note?: string;
+  /**
+   * Bar colour. `demo` for a simulated stream.
+   *
+   * A second, redundant signal alongside the Demo Mode label. It exists because
+   * a screenshot of a simulated reading and a screenshot of a real one should
+   * not be identical — someone comparing two screenshots, or glancing at a
+   * screen from across a room, is the case the label alone does not cover.
+   */
+  tone?: 'accent' | 'demo';
 }
 
-const TRACK_HEIGHT = 96;
-
 /**
- * A single finger's flexion, as a vertical bar.
+ * One finger's bend, as a horizontal bar plus its two readings.
  *
- * Animated with `scaleY` and `useNativeDriver: true`, so the 20 Hz update runs
- * on the UI thread rather than crossing the bridge on every sample. That is
- * what keeps a streaming display from stuttering while the JS thread is busy
- * calibrating.
+ * ## Why horizontal
  *
- * The numeric value is rendered as text as well as shown as a bar height, so
- * the reading does not depend on being able to see fine visual differences.
+ * Ten vertical bars (five fingers, two hands) forced narrow tracks with
+ * three-character labels, and the numeric value had to sit under each one. A
+ * row per finger gives the label its full word and puts both the calibrated
+ * and raw figures on the same line as the bar they describe, which is what
+ * makes the pair readable at a glance.
+ *
+ * ## Animation
+ *
+ * The fill is a full-width bar scaled on X from its left edge, animated on the
+ * native driver so the 12 Hz sample rate does not put layout work on the JS
+ * thread. `transformOrigin` is what pins the scale to the left edge; without
+ * it the bar would grow from the centre and read as a different value.
  */
-export function FlexBar({ label, value }: FlexBarProps): React.JSX.Element {
-  const clamped = Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+export function FlexBar({
+  label,
+  calibrated,
+  raw,
+  note,
+  tone = 'accent',
+}: FlexBarProps): React.JSX.Element {
+  const styles = useStyles(makeStyles);
+  const { palette } = useTheme();
+  const available = calibrated !== null && Number.isFinite(calibrated);
+  const clamped = available ? Math.min(1, Math.max(0, calibrated)) : 0;
+
   const scale = useRef(new Animated.Value(clamped)).current;
 
   useEffect(() => {
@@ -37,49 +74,95 @@ export function FlexBar({ label, value }: FlexBarProps): React.JSX.Element {
   }, [clamped, scale]);
 
   return (
-    <View style={styles.container} accessibilityElementsHidden>
+    <View
+      style={styles.row}
+      accessible
+      accessibilityLabel={
+        available
+          ? `${label}, bend ${(clamped * 100).toFixed(0)} percent`
+          : `${label}, no reading available`
+      }
+    >
+      <AppText variant="caption" color={styles.label.color} style={styles.label} numberOfLines={1}>
+        {label}
+      </AppText>
+
       <View style={styles.track}>
-        <Animated.View
-          style={[
-            styles.fill,
-            {
-              transform: [
-                { translateY: TRACK_HEIGHT / 2 },
-                { scaleY: scale },
-                { translateY: -TRACK_HEIGHT / 2 },
-              ],
-            },
-          ]}
-        />
+        {available && (
+          <Animated.View
+            style={[
+              styles.fill,
+              {
+                backgroundColor: tone === 'demo' ? palette.demo : palette.accent,
+                transform: [{ scaleX: scale }],
+              },
+            ]}
+          />
+        )}
       </View>
-      <AppText variant="caption" color={colors.textMuted} numberOfLines={1}>
-        {label.slice(0, 3)}
-      </AppText>
-      <AppText variant="caption" color={colors.textSecondary}>
-        {clamped.toFixed(2)}
-      </AppText>
+
+      <View style={styles.values}>
+        <AppText variant="reading" color={available ? styles.value.color : styles.none.color}>
+          {available ? clamped.toFixed(2) : '—'}
+        </AppText>
+        <AppText variant="caption" color={styles.raw.color} numberOfLines={1}>
+          {raw === null ? 'raw —' : `raw ${formatRaw(raw)}`}
+          {note !== undefined ? ` · ${note}` : ''}
+        </AppText>
+      </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  track: {
-    width: '100%',
-    height: TRACK_HEIGHT,
-    backgroundColor: colors.surfaceRaised,
-    borderRadius: radii.sm,
-    overflow: 'hidden',
-    justifyContent: 'flex-end',
-  },
-  fill: {
-    width: '100%',
-    height: TRACK_HEIGHT,
-    backgroundColor: colors.accent,
-    borderRadius: radii.sm,
-  },
-});
+/** Raw values have no fixed scale, so they are shown verbatim but bounded. */
+function formatRaw(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2);
+}
+
+const makeStyles = (palette: Palette) =>
+  StyleSheet.create({
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingVertical: spacing.sm,
+    },
+    label: {
+      width: 52,
+      color: palette.textSecondary,
+    },
+    track: {
+      flex: 1,
+      height: 8,
+      borderRadius: radii.pill,
+      backgroundColor: palette.surfaceSunken,
+      overflow: 'hidden',
+    },
+    fill: {
+      width: '100%',
+      height: '100%',
+      borderRadius: radii.pill,
+      backgroundColor: palette.accent,
+      /*
+       * Scaling from the left edge is what makes the bar grow from its start
+       * rather than its middle. It lives here rather than inline with the
+       * animated transform because it never changes — only `scaleX` does.
+       */
+      transformOrigin: 'left',
+    },
+    values: {
+      width: 92,
+      alignItems: 'flex-end',
+      gap: 1,
+    },
+    value: {
+      color: palette.textPrimary,
+    },
+    none: {
+      color: palette.textMuted,
+    },
+    raw: {
+      color: palette.textMuted,
+    },
+  });

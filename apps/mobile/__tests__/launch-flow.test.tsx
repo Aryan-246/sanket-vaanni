@@ -1,187 +1,192 @@
 /**
- * Root flow: the launch gate, navigation, and the home screen's honesty rules.
+ * Root flow: the launch gate and the four-tab navigation.
  *
  * These tests exercise real routing and real state, not a mocked navigator.
  *
  * The gate is the process-lifetime session from `launchSession.ts`, not
  * persisted storage, so each case constructs its own session with
  * `createIntroSession()`. That is what makes "this is a fresh launch"
- * expressible in a test at all — under the old persisted flag, the second test
- * in this file would have behaved differently from the first, which was exactly
- * the bug.
+ * expressible in a test at all — under a persisted flag, the second test in this
+ * file would have behaved differently from the first, which was exactly the bug.
  *
- * Note that `render` does not await anything before asserting. The launch
- * decision is synchronous by design; the previous version had to await a
- * storage read, and the blank frame it rendered while waiting was the black
- * startup gap.
+ * Note that nothing here mocks the screens. The markers asserted below are the
+ * `testID` each screen's root `Screen` carries, so a destination that fails to
+ * mount fails the test rather than passing against a stub.
  */
-import React from 'react';
+import { BackHandler } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 
-import { AppStateProvider } from '../src/app/AppState';
-import { RootNavigator } from '../src/app/RootNavigator';
 import { createIntroSession } from '../src/app/launchSession';
-import type { IntroSession } from '../src/app/launchSession';
-import { MockTransport } from '../src/ble/mockTransport';
-import { createInMemoryStorage } from '../src/storage';
-
-/** A string only the home screen renders. */
-const HOME_MARKER = 'Glove link';
-/** The native video host component, as mocked in `jest.setup.js`. */
-const VIDEO_MARKER = '"Video"';
-/** A string only the settings screen renders. */
-const SETTINGS_MARKER = 'Replay intro';
-
-async function render(
-  session: IntroSession = createIntroSession(),
-): Promise<ReactTestRenderer.ReactTestRenderer> {
-  const transport = new MockTransport('right');
-  let renderer!: ReactTestRenderer.ReactTestRenderer;
-
-  await ReactTestRenderer.act(async () => {
-    renderer = ReactTestRenderer.create(
-      <AppStateProvider storage={createInMemoryStorage()} transport={transport}>
-        <RootNavigator introSession={session} />
-      </AppStateProvider>,
-    );
-  });
-
-  return renderer;
-}
-
-function text(renderer: ReactTestRenderer.ReactTestRenderer): string {
-  return JSON.stringify(renderer.toJSON());
-}
-
-async function press(
-  renderer: ReactTestRenderer.ReactTestRenderer,
-  accessibilityLabel: string,
-): Promise<void> {
-  const target = renderer.root.findByProps({ accessibilityLabel });
-  await ReactTestRenderer.act(async () => {
-    target.props.onPress();
-  });
-}
-
-/** Unmounts so the intro's timers do not outlive the test. */
-async function teardown(renderer: ReactTestRenderer.ReactTestRenderer): Promise<void> {
-  await ReactTestRenderer.act(async () => {
-    renderer.unmount();
-  });
-}
+import {
+  AUDIT_MARKER,
+  DASHBOARD_MARKER,
+  MORE_MARKER,
+  OLED_MARKER,
+  VIDEO_MARKER,
+  has,
+  pressByLabel,
+  pressByTestId,
+  renderApp,
+  teardown,
+  textOf,
+} from './support';
 
 describe('launch gate', () => {
   it('starts with the intro on a fresh launch', async () => {
-    const renderer = await render();
-    const output = text(renderer);
+    const { renderer, session } = await renderApp();
+    const output = textOf(renderer);
 
+    expect(session.shouldPlayIntro()).toBe(true);
     expect(output).toContain(VIDEO_MARKER);
-    expect(output).not.toContain(HOME_MARKER);
+    expect(output).not.toContain(DASHBOARD_MARKER);
 
     await teardown(renderer);
   });
 
-  it('starts on the home screen when this launch already showed the intro', async () => {
+  it('starts on the Dashboard when this launch already showed the intro', async () => {
     // Standing in for "the user pressed Home and came back": the process, and
     // therefore the session, is still alive.
-    const session = createIntroSession();
-    session.markIntroPlayed();
+    const { renderer } = await renderApp({ skipIntro: true });
+    const output = textOf(renderer);
 
-    const renderer = await render(session);
-    const output = text(renderer);
-
-    expect(output).toContain(HOME_MARKER);
+    expect(output).toContain(DASHBOARD_MARKER);
     expect(output).not.toContain(VIDEO_MARKER);
 
     await teardown(renderer);
   });
 
   it('shows the intro again on a new session, however many launches preceded it', async () => {
-    // The regression this whole change exists for: under the persisted flag the
+    // The regression this whole change exists for: under a persisted flag the
     // intro appeared exactly once, ever.
     const previousLaunch = createIntroSession();
     previousLaunch.markIntroPlayed();
 
-    const renderer = await render(createIntroSession());
+    const { renderer } = await renderApp({ session: createIntroSession() });
 
-    expect(text(renderer)).toContain(VIDEO_MARKER);
+    expect(textOf(renderer)).toContain(VIDEO_MARKER);
 
     await teardown(renderer);
   });
 });
 
 describe('navigation', () => {
-  it('opens settings from home and returns with Done', async () => {
-    const session = createIntroSession();
-    session.markIntroPlayed();
+  it('reaches all four destinations from the tab bar', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
 
-    const renderer = await render(session);
-    await press(renderer, 'Settings');
-    expect(text(renderer)).toContain(SETTINGS_MARKER);
+    expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
 
-    await press(renderer, 'Done');
-    expect(text(renderer)).toContain(HOME_MARKER);
-    expect(text(renderer)).not.toContain(SETTINGS_MARKER);
+    await pressByLabel(renderer, 'OLED');
+    expect(has(renderer, OLED_MARKER)).toBe(true);
+
+    await pressByLabel(renderer, 'Audit');
+    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+
+    await pressByLabel(renderer, 'More');
+    expect(has(renderer, MORE_MARKER)).toBe(true);
+
+    await pressByLabel(renderer, 'Dashboard');
+    expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
 
     await teardown(renderer);
   });
 
-  it('replays the intro from settings, even though this launch already showed it', async () => {
-    // Replay is an explicit user action, so it must not be filtered by the
-    // launch gate.
-    const session = createIntroSession();
-    session.markIntroPlayed();
+  it('mounts only the active destination', async () => {
+    // The performance decision, asserted rather than assumed: four mounted
+    // screens would keep the Dashboard's sensor subscription re-rendering while
+    // the user is reading the audit.
+    const { renderer } = await renderApp({ skipIntro: true });
 
-    const renderer = await render(session);
-    await press(renderer, 'Settings');
-    await press(renderer, 'Replay intro');
+    await pressByLabel(renderer, 'Audit');
 
-    expect(text(renderer)).toContain(VIDEO_MARKER);
+    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+    expect(has(renderer, DASHBOARD_MARKER)).toBe(false);
+    expect(has(renderer, OLED_MARKER)).toBe(false);
+    expect(has(renderer, MORE_MARKER)).toBe(false);
+
+    await teardown(renderer);
+  });
+
+  it('does not replay the intro when moving between tabs', async () => {
+    const { renderer, session } = await renderApp({ skipIntro: true });
+
+    await pressByLabel(renderer, 'OLED');
+    await pressByLabel(renderer, 'More');
+
+    expect(textOf(renderer)).not.toContain(VIDEO_MARKER);
+    expect(session.shouldPlayIntro()).toBe(false);
+
+    await teardown(renderer);
+  });
+
+  it('replays the intro from More, even though this launch already showed it', async () => {
+    // Replay is an explicit user action, so it must not be filtered by the gate.
+    const { renderer } = await renderApp({ skipIntro: true });
+
+    await pressByLabel(renderer, 'More');
+    await pressByTestId(renderer, 'replay-intro-row');
+
+    expect(textOf(renderer)).toContain(VIDEO_MARKER);
 
     await teardown(renderer);
   });
 });
 
-describe('home screen honesty', () => {
-  async function renderHome(): Promise<ReactTestRenderer.ReactTestRenderer> {
-    const session = createIntroSession();
-    session.markIntroPlayed();
-    return render(session);
+describe('Android back', () => {
+  /** Captures the handler the navigator registers, so it can be invoked. */
+  function captureBackHandler(): { invoke: () => boolean } {
+    let handler: (() => boolean) | null = null;
+    jest
+      .spyOn(BackHandler, 'addEventListener')
+      .mockImplementation((_event, listener) => {
+        handler = listener as () => boolean;
+        return { remove: jest.fn() };
+      });
+
+    return {
+      invoke: () => {
+        if (handler === null) throw new Error('No back handler was registered.');
+        return handler();
+      },
+    };
   }
 
-  it('labels simulated data as Demo Mode', async () => {
-    const renderer = await renderHome();
-    expect(text(renderer)).toContain('Demo mode');
+  afterEach(() => jest.restoreAllMocks());
+
+  it('returns to the Dashboard from another tab', async () => {
+    const back = captureBackHandler();
+    const { renderer } = await renderApp({ skipIntro: true });
+
+    await pressByLabel(renderer, 'Audit');
+    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+
+    await ReactTestRenderer.act(async () => {
+      expect(back.invoke()).toBe(true);
+    });
+
+    expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
+    expect(has(renderer, AUDIT_MARKER)).toBe(false);
 
     await teardown(renderer);
   });
 
-  it('states that recognition is not implemented instead of showing a sign', async () => {
-    const renderer = await renderHome();
-    const output = text(renderer);
+  it('does not intercept back on the Dashboard itself', async () => {
+    // A handler here would swallow the press and stop the OS leaving the app,
+    // which is the standard Android behaviour on a root screen.
+    const back = captureBackHandler();
+    const { renderer } = await renderApp({ skipIntro: true });
 
-    expect(output).toContain('Recognised sign');
-    expect(output).toContain('Not implemented');
-    expect(output).toContain('No recognition model exists yet');
-
-    await teardown(renderer);
-  });
-
-  it('says Bluetooth is not in use', async () => {
-    const renderer = await renderHome();
-    expect(text(renderer)).toContain('no Bluetooth is in use');
+    expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
+    expect(() => back.invoke()).toThrow('No back handler was registered.');
 
     await teardown(renderer);
   });
 
-  it('does not display a fabricated sign or confidence', async () => {
-    const renderer = await renderHome();
-    const output = text(renderer);
+  it('leaves the app alone while the intro is playing', async () => {
+    const back = captureBackHandler();
+    const { renderer } = await renderApp();
 
-    // The recogniser returns null and reports no confidence, so no percentage
-    // or confidence figure should appear anywhere on the screen.
-    expect(output).not.toMatch(/\d+%\s*(confidence|match)/i);
-    expect(output).not.toContain('confidence');
+    expect(textOf(renderer)).toContain(VIDEO_MARKER);
+    expect(() => back.invoke()).toThrow('No back handler was registered.');
 
     await teardown(renderer);
   });

@@ -86,6 +86,11 @@ export class MockTransport implements GloveTransport {
   #sampleListeners = new Set<(sample: RawSample) => void>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #startedAtMs = 0;
+  /** Elapsed time accrued before the most recent resume. */
+  #accumulatedMs = 0;
+  /** True between connect() and disconnect(), regardless of pausing. */
+  #streaming = false;
+  #paused = false;
 
   constructor(side: GloveSide = 'right', options: MockTransportOptions = {}) {
     this.#side = side;
@@ -156,11 +161,42 @@ export class MockTransport implements GloveTransport {
     this.#sampleListeners.clear();
   }
 
-  #startStreaming(): void {
-    this.#stopStreaming();
+  /**
+   * Stops producing frames but keeps the connection.
+   *
+   * The waveform's phase is preserved across a pause, so resuming continues
+   * the motion rather than jumping — a visible discontinuity would look like a
+   * sensor glitch, and a simulator that produces glitches teaches the wrong
+   * thing about the hardware.
+   */
+  pause(): void {
+    if (!this.#streaming || this.#paused) return;
+    this.#accumulatedMs += this.#elapsedSinceStart();
+    this.#paused = true;
+    if (this.#timer !== null) {
+      clearInterval(this.#timer);
+      this.#timer = null;
+    }
+  }
+
+  resume(): void {
+    if (!this.#streaming || !this.#paused) return;
+    this.#paused = false;
     this.#startedAtMs = Date.now();
+    this.#schedule();
+  }
+
+  #elapsedSinceStart(): number {
+    return Date.now() - this.#startedAtMs;
+  }
+
+  #elapsedMs(): number {
+    return this.#accumulatedMs + this.#elapsedSinceStart() + this.#sideOffsetMs;
+  }
+
+  #schedule(): void {
     this.#timer = setInterval(() => {
-      const elapsed = Date.now() - this.#startedAtMs + this.#sideOffsetMs;
+      const elapsed = this.#elapsedMs();
       const flex = buildFlexReading(elapsed);
       const sample: RawSample = {
         side: this.#side,
@@ -184,11 +220,22 @@ export class MockTransport implements GloveTransport {
     }, this.#sampleIntervalMs);
   }
 
+  #startStreaming(): void {
+    this.#stopStreaming();
+    this.#accumulatedMs = 0;
+    this.#paused = false;
+    this.#streaming = true;
+    this.#startedAtMs = Date.now();
+    this.#schedule();
+  }
+
   #stopStreaming(): void {
     if (this.#timer !== null) {
       clearInterval(this.#timer);
       this.#timer = null;
     }
+    this.#streaming = false;
+    this.#paused = false;
   }
 
   #setStatus(status: TransportStatus): void {

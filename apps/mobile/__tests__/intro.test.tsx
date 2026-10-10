@@ -17,6 +17,8 @@ import { Animated, StatusBar } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 
 import { IntroScreen } from '../src/screens/IntroScreen';
+import { createInMemoryStorage } from '../src/storage';
+import { ThemeProvider } from '../src/theme/ThemeProvider';
 
 const SKIP_LABEL = 'Skip intro';
 const SKIP_REVEAL_MS = 700;
@@ -36,12 +38,25 @@ const CLIP_MS = 6_467;
 const POSTER_TEST_ID = 'intro-poster';
 const FALLBACK_TEST_ID = 'intro-fallback';
 
+/**
+ * Renders the intro inside the theme.
+ *
+ * The intro does not read the palette — its own text colour is a literal, on
+ * purpose, because it is a full-screen cinematic on the clip's black background
+ * in both themes. It is wrapped here because it renders `AppText`, whose API is
+ * to take its colour from the theme; without a provider it throws rather than
+ * falling back to a default, and that strictness is deliberate.
+ */
 async function renderIntro(
   onComplete: () => void,
 ): Promise<ReactTestRenderer.ReactTestRenderer> {
   let renderer!: ReactTestRenderer.ReactTestRenderer;
   await ReactTestRenderer.act(async () => {
-    renderer = ReactTestRenderer.create(<IntroScreen onComplete={onComplete} />);
+    renderer = ReactTestRenderer.create(
+      <ThemeProvider storage={createInMemoryStorage()} initialMode="dark">
+        <IntroScreen onComplete={onComplete} />
+      </ThemeProvider>,
+    );
   });
   return renderer;
 }

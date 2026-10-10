@@ -16,7 +16,7 @@ mobile app, and you do not need the mobile app to run the backend.
 | npm | 11.x | Ships with Node. |
 | Git | 2.x | Version control. |
 | JDK | 17 (Temurin 17.0.20) | Android Gradle Plugin 8.x rejects JDK 8 and warns on 21+. |
-| Android SDK | platform 36, build-tools 36.0.0 | Required only to build/run the mobile app. |
+| Android SDK | platform 37, build-tools 37.0.0, NDK 27.1.12297006 | Required only to build/run the mobile app. |
 
 Check what you have:
 
@@ -24,11 +24,17 @@ Check what you have:
 node --version
 npm --version
 git --version
-java -version              # must report 17.x
+java -version              # ideally 17.x
 echo $env:JAVA_HOME        # must point at the JDK 17 folder
 ```
 
-If `java -version` reports anything other than 17, set it for the session:
+> **`java -version` and `JAVA_HOME` can disagree, and that is fine.** On the
+> machine this was built on, `java -version` reports `1.8.0_503` because an old
+> JDK 8 sits earlier on `PATH`, while `JAVA_HOME` points at JDK 17.0.20. Gradle
+> honours `JAVA_HOME`, so the Android build succeeds regardless. **`JAVA_HOME`
+> is the one that matters** — check it, not `java -version`.
+
+If `JAVA_HOME` is unset or points at the wrong JDK, set it for the session:
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
@@ -294,8 +300,22 @@ Output: `apps\mobile\android\app\build\outputs\apk\release\app-release.apk`
 
 ## 7. Troubleshooting
 
+**`adb: command not found` / `adb: no devices/emulators found`** — `adb` lives
+in `%LOCALAPPDATA%\Android\Sdk\platform-tools` and is not always on `PATH`.
+Add it for the session:
+
+```powershell
+$env:Path = "$env:LOCALAPPDATA\Android\Sdk\platform-tools;$env:Path"
+adb devices
+```
+
+`npm run android` needs `adb` on `PATH`; `.\gradlew.bat assembleDebug` does not.
+If you have no device, build the APK and install it later.
+
 **`SDK location not found`** — `ANDROID_HOME` is unset and
-`android\local.properties` is missing. See §1.
+`android\local.properties` is missing. That is the situation on the machine
+this was built on, where `local.properties` is what makes the build work.
+See §1.
 
 **`Unsupported class file major version` / Gradle Java errors** — Gradle is
 picking up the wrong JDK. Confirm `java -version` reports 17 and that

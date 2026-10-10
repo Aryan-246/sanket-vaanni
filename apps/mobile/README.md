@@ -17,7 +17,7 @@ calibration, history and configuration all work offline.
 |---|---|---|
 | Node.js | 24.16.0 | `engines` requires ≥ 22.11.0 |
 | JDK | 17 | `JAVA_HOME` must point at 17, not 8 |
-| Android SDK | platform 36, build-tools 36.0.0 | `ANDROID_HOME` or `android/local.properties` |
+| Android SDK | platform 37, build-tools 37.0.0, NDK 27.1.12297006 | `ANDROID_HOME` or `android/local.properties` |
 | npm | 11.x | |
 
 ## Setup

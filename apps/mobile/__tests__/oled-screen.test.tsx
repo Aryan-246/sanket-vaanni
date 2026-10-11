@@ -1,25 +1,34 @@
 /**
- * OLED Studio, as a user operates it.
+ * OLED Studio and its profiles, as a user operates them.
  *
- * Driven through the real app: the tab bar, the rows, the editor sheet and the
- * confirmation dialog. The behaviour under test is the part of the brief that
- * is easy to claim and hard to honour — that hiding is not deleting, that a
- * reset which discards customisation asks first, that a preset survives a
- * restart, and that nothing on this screen pretends a physical panel changed.
+ * Driven through the real app: the tab bar, the panel switch, the rows, the
+ * editor sheet, the profile sheet and the confirmation dialogs. The behaviour
+ * under test is the part of the brief that is easy to claim and hard to honour —
+ * that the two panels are configured independently, that hiding is not deleting,
+ * that a reset which discards customisation asks first, that a profile survives a
+ * restart, that operating on one profile does not alter another, and that nothing
+ * on this screen pretends a physical panel changed.
  */
 import ReactTestRenderer from 'react-test-renderer';
 
 import { TextField } from '../src/components/TextField';
-import { featureKeys } from '../src/storage';
-import { createInMemoryStorage, type Storage } from '../src/storage';
-import {
-  pressByLabel,
-  renderApp,
-  renderedText,
-  teardown,
-} from './support';
+import { featureKeys, createInMemoryStorage, type Storage } from '../src/storage';
+import { defaultLayout } from '../src/oled/layout';
+import { pressByLabel, renderApp, renderedText, teardown } from './support';
 
 /* ------------------------------------------------------------------ helpers */
+
+/**
+ * Every test leaves with real timers, however it ended.
+ *
+ * Several cases below need fake timers to flush the studio's coalesced write.
+ * Without this hook, a *failing* case would skip its own `jest.useRealTimers()`
+ * and hand fake timers to the next test — which turns one genuine failure into a
+ * second, misleading one in a different test.
+ */
+afterEach(() => {
+  jest.useRealTimers();
+});
 
 /**
  * The restore control's label, which is singular for one hidden item.
@@ -51,28 +60,43 @@ function isDisabledByLabel(
     .some((node) => node.props.accessibilityState?.disabled === true);
 }
 
-async function openStudio(
+/**
+ * Whether a segmented option is the selected one.
+ *
+ * Read from the control's own accessibility state rather than from a style, so
+ * this asserts what the screen *announces* — which is what a screen-reader user
+ * has to go on, and what a colour-only difference would fail to convey.
+ */
+function isSelectedByLabel(
   renderer: ReactTestRenderer.ReactTestRenderer,
-): Promise<void> {
+  accessibilityLabel: string,
+): boolean {
+  return renderer.root
+    .findAllByProps({ accessibilityLabel })
+    .some((node) => node.props.accessibilityState?.selected === true);
+}
+
+async function openStudio(renderer: ReactTestRenderer.ReactTestRenderer): Promise<void> {
   await pressByLabel(renderer, 'OLED');
 }
 
+async function openProfiles(renderer: ReactTestRenderer.ReactTestRenderer): Promise<void> {
+  await pressByLabel(renderer, 'Manage OLED profiles');
+}
+
 /**
- * Hides the Battery row, which is the shortest path to a customised layout.
+ * Hides one item's row, which is the shortest path to a customised layout.
  *
- * Battery because its value is permanently `--`, so hiding it changes nothing
- * about what the panel shows — the test is about the layout model, not about
- * the reading.
+ * `Status` because it is in the default layout and its value is not what the
+ * test is about — hiding it changes nothing except the layout.
  */
-async function hideBatteryRow(
-  renderer: ReactTestRenderer.ReactTestRenderer,
-): Promise<void> {
-  await pressByLabel(renderer, 'Battery');
-  await pressByLabel(renderer, 'Show Battery on the panel');
+async function hideStatusRow(renderer: ReactTestRenderer.ReactTestRenderer): Promise<void> {
+  await pressByLabel(renderer, 'Status');
+  await pressByLabel(renderer, 'Show Status on the panel');
   await pressByLabel(renderer, 'Done');
 }
 
-/** Types into the only field on screen, standing in for a keystroke per character. */
+/** Types into the field with this label, standing in for a keystroke per character. */
 async function typeInto(
   renderer: ReactTestRenderer.ReactTestRenderer,
   label: string,
@@ -95,6 +119,33 @@ async function flushWrite(ms = 500): Promise<void> {
     jest.advanceTimersByTime(ms);
     await Promise.resolve();
   });
+}
+
+/** The persisted profile set, or null when nothing has been written. */
+async function storedProfiles(
+  storage: Storage,
+): Promise<{ activeId: string; profiles: Array<Record<string, never>> } | null> {
+  return storage.getJson<{ activeId: string; profiles: Array<Record<string, never>> }>(
+    featureKeys.oledProfiles,
+  );
+}
+
+/** One hand as it reached storage. */
+interface StoredHand {
+  enabled: boolean;
+  layout: { loadingStyle: string; items: Array<{ kind: string; visible: boolean }> };
+}
+
+/** Narrows the stored payload enough to assert on one hand. */
+async function storedHand(
+  storage: Storage,
+  profileIndex: number,
+  side: 'left' | 'right',
+): Promise<StoredHand | null> {
+  const stored = await storage.getJson<{
+    profiles: Array<Record<string, StoredHand>>;
+  }>(featureKeys.oledProfiles);
+  return stored?.profiles[profileIndex]?.[side] ?? null;
 }
 
 /* ---------------------------------------------------------------- the preview */
@@ -135,6 +186,172 @@ describe('the preview says what it is', () => {
 
     await teardown(renderer);
   });
+
+  it('says the on/off is desired, and refuses to report the panel as on', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    const output = renderedText(renderer);
+
+    expect(output).toContain('A saved On is a desired setting, not a report from the hardware.');
+    // The panel's actual state has no source, and says so rather than inferring
+    // it from the flag the user just set.
+    expect(output).toContain('Not reported');
+    expect(output).toContain('cannot know whether this panel is lit');
+
+    await teardown(renderer);
+  });
+
+  it('does not claim that image or frame-sequence conversion exists', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    const output = renderedText(renderer);
+
+    expect(output).toContain('Not implemented');
+    expect(output).toContain('conversion is not part of this build');
+    // The one thing that is arithmetic rather than a measurement.
+    expect(output).toContain('1024 bytes');
+
+    await teardown(renderer);
+  });
+
+  it('offers no battery reading, because no pack has ever reported one', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    // The kind is offered — a layout waiting for telemetry is legitimate — but
+    // the default layout does not lead with a placeholder, and the row itself is
+    // marked as having no source.
+    expect(renderedText(renderer)).toContain('Battery is the one item with no source');
+    expect(renderedText(renderer)).toContain('SANKET VAANNI');
+
+    await teardown(renderer);
+  });
+});
+
+/* --------------------------------------------------------------- the panels */
+
+describe('the two panels are configured separately', () => {
+  it('edits the left panel without touching the right', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    // The running view, on the right, uses dots.
+    expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
+
+    // Switch to the left panel and give it the bar indicator.
+    await pressByLabel(renderer, 'Left');
+    await pressByLabel(renderer, 'Bar');
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
+
+    // Switching back shows the right panel's own setting, untouched.
+    await pressByLabel(renderer, 'Right');
+    expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(false);
+
+    await flushWrite();
+    expect((await storedHand(storage, 0, 'left'))?.layout.loadingStyle).toBe('bar');
+    expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('dots');
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('keeps a hidden row on the panel it was hidden on', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Left');
+    await hideStatusRow(renderer);
+    expect(offersRestore(renderer)).toBe(true);
+
+    await flushWrite();
+    const left = await storedHand(storage, 0, 'left');
+    const right = await storedHand(storage, 0, 'right');
+
+    expect(left?.layout.items.find((item) => item.kind === 'status')?.visible).toBe(false);
+    expect(right?.layout.items.find((item) => item.kind === 'status')?.visible).toBe(true);
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('stores the desired on/off per hand', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Desired: right panel on');
+    await flushWrite();
+
+    expect((await storedHand(storage, 0, 'right'))?.enabled).toBe(true);
+    // The other panel was not switched on by association.
+    expect((await storedHand(storage, 0, 'left'))?.enabled).toBe(false);
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+});
+
+/* ------------------------------------------------------------------ the views */
+
+describe('the startup view', () => {
+  it('moves a row between the two views and stops drawing it in the running one', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    // The wordmark is in the running view to begin with.
+    expect(renderedText(renderer)).toContain('SANKET VAANNI');
+
+    await pressByLabel(renderer, 'Title');
+    await pressByLabel(renderer, 'Startup only');
+    await pressByLabel(renderer, 'Done');
+
+    // Now the running view says so, rather than silently drawing less.
+    expect(renderedText(renderer)).toContain('1 item belongs to the startup view');
+
+    // And the startup view draws it. Asserted on the canvas itself rather than on
+    // the caption, because the caption would still read "Startup view" if the
+    // frame were empty.
+    await pressByLabel(renderer, 'Startup view');
+    expect(isSelectedByLabel(renderer, 'Startup view')).toBe(true);
+    expect(renderer.root.findAllByProps({ testID: 'oled-canvas' }).length).toBeGreaterThan(0);
+
+    await teardown(renderer);
+  });
+
+  it('warns when a hold would show nothing the running view does not', async () => {
+    // A duration with no startup-only item means the panel sits on a view it was
+    // going to show anyway — a setting that does nothing.
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    expect(renderedText(renderer)).not.toContain('this hold changes nothing');
+
+    await typeInto(renderer, 'Exact hold, in milliseconds', '2000');
+
+    expect(renderedText(renderer)).toContain('this hold changes nothing');
+
+    await teardown(renderer);
+  });
+
+  it('stops warning once a row is actually in the startup view', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    await typeInto(renderer, 'Exact hold, in milliseconds', '2000');
+    await pressByLabel(renderer, 'Title');
+    await pressByLabel(renderer, 'Startup only');
+    await pressByLabel(renderer, 'Done');
+
+    expect(renderedText(renderer)).not.toContain('this hold changes nothing');
+
+    await teardown(renderer);
+  });
 });
 
 /* ------------------------------------------------------- hiding and restoring */
@@ -143,12 +360,12 @@ describe('hidden items', () => {
   it('hides an item without losing it, and offers to bring it back', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
-    await hideBatteryRow(renderer);
+    await hideStatusRow(renderer);
 
     const output = renderedText(renderer);
 
     // The row is still in the list — hiding is not deleting.
-    expect(output).toContain('Battery');
+    expect(output).toContain('Status');
     expect(output).toContain('hidden');
     expect(output).toContain(RESTORE_ONE);
 
@@ -158,7 +375,7 @@ describe('hidden items', () => {
   it('restores every hidden item, and then stops offering to', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
-    await hideBatteryRow(renderer);
+    await hideStatusRow(renderer);
 
     await pressByLabel(renderer, RESTORE_ONE);
 
@@ -167,50 +384,33 @@ describe('hidden items', () => {
 
     await teardown(renderer);
   });
-
-  it('survives a restart, because the layout is written as it is edited', async () => {
-    jest.useFakeTimers();
-    const storage = createInMemoryStorage();
-
-    const first = await renderApp({ skipIntro: true, storage });
-    expect(first.storage).toBe(storage);
-    await openStudio(first.renderer);
-    await hideBatteryRow(first.renderer);
-    await flushWrite();
-    await teardown(first.renderer);
-
-    // What was stored is a layout with a hidden row, not a flag about one.
-    const stored = await storage.getJson<{ items: Array<{ kind: string; visible: boolean }> }>(
-      featureKeys.oledLayout,
-    );
-    const battery = stored?.items.find((entry) => entry.kind === 'battery');
-    expect(battery?.visible).toBe(false);
-
-    // A restart is a new tree over the same storage.
-    const second = await renderApp({ skipIntro: true, storage });
-    await flushWrite();
-    await openStudio(second.renderer);
-
-    expect(renderedText(second.renderer)).toContain(RESTORE_ONE);
-
-    await teardown(second.renderer);
-    jest.useRealTimers();
-  });
 });
 
 /* ------------------------------------------------------------------- reset */
 
-describe('reset', () => {
-  it('asks before discarding customisation, and says what is lost', async () => {
+describe('restoring defaults', () => {
+  it('does not offer it on a profile that is already at its defaults', async () => {
+    // Offering it would imply there is something to discard.
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
-    await hideBatteryRow(renderer);
 
-    await pressByLabel(renderer, 'Reset layout to defaults');
+    expect(isDisabledByLabel(renderer, "Restore this profile's defaults")).toBe(true);
+
+    await teardown(renderer);
+  });
+
+  it('asks before discarding, and says what is lost', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await hideStatusRow(renderer);
+
+    await pressByLabel(renderer, "Restore this profile's defaults");
 
     const output = renderedText(renderer);
-    expect(output).toContain('Reset layout?');
+    expect(output).toContain('Restore defaults?');
     expect(output).toContain('including bringing back 1 hidden item');
+    // And it says what is *not* lost, because that is the real question.
+    expect(output).toContain('Other profiles are kept.');
     expect(output).toContain('Keep my layout');
 
     await teardown(renderer);
@@ -219,12 +419,11 @@ describe('reset', () => {
   it('keeps the layout when the user declines', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
-    await hideBatteryRow(renderer);
-    await pressByLabel(renderer, 'Reset layout to defaults');
+    await hideStatusRow(renderer);
+    await pressByLabel(renderer, "Restore this profile's defaults");
 
     await pressByLabel(renderer, 'Keep my layout');
 
-    // Untouched: the hidden row is still hidden.
     expect(renderedText(renderer)).toContain(RESTORE_ONE);
 
     await teardown(renderer);
@@ -233,114 +432,336 @@ describe('reset', () => {
   it('restores the defaults, hidden items included, when confirmed', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
-    await hideBatteryRow(renderer);
-    await pressByLabel(renderer, 'Reset layout to defaults');
+    await hideStatusRow(renderer);
+    await pressByLabel(renderer, "Restore this profile's defaults");
 
-    await pressByLabel(renderer, 'Reset');
+    await pressByLabel(renderer, 'Restore');
 
     const output = renderedText(renderer);
     expect(offersRestore(renderer)).toBe(false);
-    // Back to the default layout: every item shown, wordmark and all.
     expect(output).toContain('4 shown');
     expect(output).toContain('SANKET VAANNI');
 
     await teardown(renderer);
   });
 
-  it('does not offer a reset on a layout that is already at its defaults', async () => {
-    // Offering it would imply there is something to discard.
-    const { renderer } = await renderApp({ skipIntro: true });
+  it('restores both hands, not just the one on screen', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
     await openStudio(renderer);
 
-    const reset = renderer.root.findAllByProps({
-      accessibilityLabel: 'Reset layout to defaults',
-    })[0];
-    expect(reset).toBeDefined();
-    expect(isDisabledByLabel(renderer, 'Reset layout to defaults')).toBe(true);
+    // Customise the right panel, then the left one.
+    await pressByLabel(renderer, 'Bar');
+    await pressByLabel(renderer, 'Left');
+    await pressByLabel(renderer, 'Bar');
+    await pressByLabel(renderer, "Restore this profile's defaults");
+    await pressByLabel(renderer, 'Restore');
+
+    await flushWrite();
+    expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('dots');
+    expect((await storedHand(storage, 0, 'left'))?.layout.loadingStyle).toBe('dots');
 
     await teardown(renderer);
+    jest.useRealTimers();
   });
 });
 
-/* ------------------------------------------------------------------ presets */
+/* ----------------------------------------------------------------- profiles */
 
-describe('presets', () => {
-  it('saves the current layout and brings it back later', async () => {
+describe('profiles', () => {
+  it('starts with one profile holding both panels', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
 
-    // A customised layout, saved…
-    await hideBatteryRow(renderer);
-    await pressByLabel(renderer, 'Save current layout as a preset');
-    await typeInto(renderer, 'Preset name', 'Evening class');
-    await pressByLabel(renderer, 'Save preset');
+    expect(renderedText(renderer)).toContain('Default');
+    expect(renderedText(renderer)).toContain('1 of 8');
+
+    await openProfiles(renderer);
+    expect(renderedText(renderer)).toContain('Desired: left off, right off');
+
+    await teardown(renderer);
+  });
+
+  it('refuses to delete the last profile, and says why', async () => {
+    // Every hand must have a configuration, and an empty set has no active
+    // member, so this is refused rather than papered over with a new default.
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await openProfiles(renderer);
+
+    expect(isDisabledByLabel(renderer, 'Delete the active profile')).toBe(true);
+    expect(renderedText(renderer)).toContain('The last profile cannot be deleted');
+
+    await teardown(renderer);
+  });
+
+  it('creates a profile, makes it active, and names it', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await openProfiles(renderer);
+
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
 
     expect(renderedText(renderer)).toContain('Evening class');
-
-    // …then undone…
-    await pressByLabel(renderer, RESTORE_ONE);
-    expect(offersRestore(renderer)).toBe(false);
-
-    // …then restored from the preset.
-    await pressByLabel(renderer, 'Load preset Evening class');
-    expect(renderedText(renderer)).toContain(RESTORE_ONE);
+    expect(renderedText(renderer)).toContain('2 of 8');
 
     await teardown(renderer);
   });
 
-  it('will not save an unnamed preset', async () => {
+  it('will not save a profile with no name', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
 
-    await pressByLabel(renderer, 'Save current layout as a preset');
-
-    expect(isDisabledByLabel(renderer, 'Save preset')).toBe(true);
+    expect(isDisabledByLabel(renderer, 'Save profile')).toBe(true);
 
     await teardown(renderer);
   });
 
-  it('keeps a preset separate from the layout it was copied from', async () => {
-    // The preset is a snapshot: editing afterwards must not rewrite it.
+  it('starts a new profile from the defaults rather than from the active one', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openStudio(renderer);
 
-    await hideBatteryRow(renderer);
-    await pressByLabel(renderer, 'Save current layout as a preset');
-    await typeInto(renderer, 'Preset name', 'Snapshot');
-    await pressByLabel(renderer, 'Save preset');
+    // Customise the default profile…
+    await pressByLabel(renderer, 'Bar');
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
 
-    // Reset to the defaults, then load the preset back.
-    await pressByLabel(renderer, 'Reset layout to defaults');
-    await pressByLabel(renderer, 'Reset');
-    expect(offersRestore(renderer)).toBe(false);
-    expect(renderedText(renderer)).toContain('4 shown');
+    // …then create a second one, which must not inherit the customisation.
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Fresh');
+    await pressByLabel(renderer, 'Save profile');
 
-    await pressByLabel(renderer, 'Load preset Snapshot');
-    expect(renderedText(renderer)).toContain(RESTORE_ONE);
+    expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(false);
+
+    await teardown(renderer);
+  });
+
+  it('switching profiles switches both panels back to that profile', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Bar');
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
+    expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
+
+    // Back to the first profile, whose bar indicator must have been kept.
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Default');
+
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
+
+    await teardown(renderer);
+  });
+
+  it('renames the active profile and leaves the others alone', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
+
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Rename profile Evening class');
+    await typeInto(renderer, 'Profile name', 'Evening class 2');
+    await pressByLabel(renderer, 'Rename');
+
+    const output = renderedText(renderer);
+    expect(output).toContain('Evening class 2');
+    // The other profile still has its own name.
+    expect(output).toContain('Default');
+
+    await teardown(renderer);
+  });
+
+  it('duplicates a profile into an independent copy', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+
+    await openStudio(renderer);
+    // Customise the profile that is about to be duplicated, so the copy has
+    // something to carry. Duplication is offered on the rows that are *not*
+    // active, so this has to happen before the second profile is created.
+    await pressByLabel(renderer, 'Bar');
+
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
+
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Duplicate profile Default');
+
+    expect(renderedText(renderer)).toContain('Default copy');
+    expect(renderedText(renderer)).toContain('3 of 8');
+
+    // The duplicate became active and carried the customisation with it.
+    await pressByLabel(renderer, 'Close');
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
+
+    await flushWrite();
+    // Three profiles, and the duplicate is a copy rather than a reference: its
+    // item array is its own.
+    const profiles = (await storedProfiles(storage))?.profiles ?? [];
+    expect(profiles).toHaveLength(3);
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('deletes a profile after confirming, and keeps the other', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
+
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Delete the active profile');
+
+    expect(renderedText(renderer)).toContain('Delete this profile?');
+    expect(renderedText(renderer)).toContain('No other profile is changed');
+
+    await pressByLabel(renderer, 'Delete');
+
+    const output = renderedText(renderer);
+    expect(output).toContain('1 of 8');
+    // The profile that was not deleted is the one still there.
+    expect(output).toContain('Default');
+    expect(output).not.toContain('2 of 8');
+
+    await teardown(renderer);
+  });
+
+  it('keeps a profile that the user declined to delete', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
+
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Delete the active profile');
+    await pressByLabel(renderer, 'Keep it');
+    await pressByLabel(renderer, 'Close');
+
+    expect(renderedText(renderer)).toContain('2 of 8');
 
     await teardown(renderer);
   });
 });
 
-/* ------------------------------------------------------------- storage hygiene */
+/* ------------------------------------------------------------- persistence */
 
 describe('what reaches storage', () => {
-  it('stores the layout under its own key and nothing else', async () => {
+  it('stores both hands of a profile under its own key', async () => {
     jest.useFakeTimers();
     const storage: Storage = createInMemoryStorage();
 
     const { renderer } = await renderApp({ skipIntro: true, storage });
     await openStudio(renderer);
-    await hideBatteryRow(renderer);
+    await hideStatusRow(renderer);
     await flushWrite();
 
-    const layout = await storage.getJson<{ version: number; items: unknown[] }>(
-      featureKeys.oledLayout,
-    );
-    expect(layout?.version).toBe(1);
-    expect(layout?.items).toHaveLength(4);
-    // No panel command, no serialised frame — the studio has no such concept.
-    expect(Object.keys(layout ?? {})).not.toContain('commands');
+    const stored = await storedProfiles(storage);
+    expect(stored?.profiles).toHaveLength(1);
+    expect(stored?.activeId).toBe('pr0');
+    // Both hands are present, and neither carries a serialised frame or command.
+    expect(stored?.profiles[0]).toHaveProperty('left');
+    expect(stored?.profiles[0]).toHaveProperty('right');
+    expect(Object.keys(stored?.profiles[0] ?? {})).not.toContain('commands');
+    // Nothing is written under the legacy keys any more.
+    expect(await storage.getJson(featureKeys.oledLayout)).toBeNull();
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('survives a restart, including which profile is active', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+
+    const first = await renderApp({ skipIntro: true, storage });
+    await openStudio(first.renderer);
+    await openProfiles(first.renderer);
+    await pressByLabel(first.renderer, 'Create a new profile');
+    await typeInto(first.renderer, 'Profile name', 'Evening class');
+    await pressByLabel(first.renderer, 'Save profile');
+    await pressByLabel(first.renderer, 'Bar');
+    await flushWrite();
+    await teardown(first.renderer);
+
+    // A restart is a new tree over the same storage.
+    const second = await renderApp({ skipIntro: true, storage });
+    await openStudio(second.renderer);
+
+    const output = renderedText(second.renderer);
+    expect(output).toContain('Evening class');
+    expect(output).toContain('2 of 8');
+    // The active profile came back with its own customisation intact.
+    expect(isSelectedByLabel(second.renderer, 'Bar')).toBe(true);
+
+    await teardown(second.renderer);
+    jest.useRealTimers();
+  });
+
+  it('migrates a pre-profile install instead of discarding it', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+
+    // The old studio's two keys: one live layout with a hidden row, one preset.
+    const legacy = defaultLayout();
+    await storage.setJson(featureKeys.oledLayout, {
+      ...legacy,
+      items: legacy.items.map((item) =>
+        item.kind === 'status' ? { ...item, visible: false } : item,
+      ),
+    });
+    await storage.setJson(featureKeys.oledPresets, [
+      { id: 'p1', name: 'Evening class', createdAtMs: 1, layout: legacy },
+    ]);
+
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    // The live layout came back, hidden row and all, as the active profile.
+    expect(renderedText(renderer)).toContain(RESTORE_ONE);
+    await openProfiles(renderer);
+    expect(renderedText(renderer)).toContain('Evening class');
+
+    await flushWrite();
+    // And the migration was written, so the legacy keys are read exactly once.
+    const stored = await storedProfiles(storage);
+    expect(stored?.profiles).toHaveLength(2);
+    expect(stored?.activeId).toBe('pr0');
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('repairs a corrupt stored payload rather than failing to open', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    await storage.setJson(featureKeys.oledProfiles, { profiles: 'not an array' });
+
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    // The screen that exists to repair a bad config has to open.
+    expect(renderedText(renderer)).toContain('Default');
+    expect(renderedText(renderer)).toContain('SANKET VAANNI');
 
     await teardown(renderer);
     jest.useRealTimers();

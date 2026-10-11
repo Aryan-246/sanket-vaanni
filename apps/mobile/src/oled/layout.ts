@@ -54,6 +54,25 @@ export type OledLoadingStyle = 'dots' | 'bar' | 'none';
 export const OLED_LOADING_STYLES: readonly OledLoadingStyle[] = ['dots', 'bar', 'none'];
 
 /**
+ * Which of the panel's two views an item belongs to.
+ *
+ * A glove's display has a startup view — what it shows while the firmware is
+ * bringing the radio up — and a running view. `always` items appear in both;
+ * `startup` items appear only in the startup view, which is what makes a
+ * boot banner possible without it occupying a row for the rest of the session.
+ */
+export type OledItemTiming = 'always' | 'startup';
+export const OLED_ITEM_TIMINGS: readonly OledItemTiming[] = ['always', 'startup'];
+
+export const OLED_TIMING_LABEL: Record<OledItemTiming, string> = {
+  always: 'Always',
+  startup: 'Startup only',
+};
+
+/** The panel view being assembled or previewed. */
+export type OledPhase = 'startup' | 'persistent';
+
+/**
  * What a row shows.
  *
  * `bound` kinds read from live values, so the studio can show what the panel
@@ -93,6 +112,17 @@ export const OLED_KIND_LABEL: Record<OledItemKind, string> = {
   loading: 'Loading indicator',
 };
 
+/**
+ * Kinds whose value no hardware has ever reported.
+ *
+ * They are still offered, because a layout that is *waiting* for telemetry is a
+ * legitimate thing to design — but the editor marks them, so a row that will
+ * draw `--` forever is never mistaken for one that is about to come alive.
+ */
+export const OLED_KIND_NEEDS_TELEMETRY: ReadonlySet<OledItemKind> = new Set<OledItemKind>([
+  'battery',
+]);
+
 /** Placeholder for a bound value that has not reported. Never a fake reading. */
 export const OLED_NO_VALUE = '--';
 
@@ -110,6 +140,14 @@ export interface OledItem {
   readonly visible: boolean;
   readonly size: OledTextSize;
   readonly align: OledAlign;
+  /**
+   * Whether the item belongs to the startup view, the running view, or both.
+   *
+   * Adding a field rather than a separate startup list is deliberate: a second
+   * list could hold an item id the main list has deleted, and the two would
+   * drift. One list, one flag, no possible disagreement.
+   */
+  readonly timing: OledItemTiming;
 }
 
 export interface OledLayout {
@@ -144,13 +182,22 @@ export const DEFAULT_ANIMATION_MS = 400;
 /**
  * Safe defaults.
  *
- * Deliberately modest: a wordmark, the live status, and two things that are
- * almost always wanted on a glove's display. Everything a user adds beyond this
- * is their choice, and everything here has a working control — there is no
- * item in the default layout that the editor cannot remove or edit.
+ * Deliberately modest: a wordmark, the two live readouts that actually have
+ * data behind them, and a loading indicator. Everything a user adds beyond this
+ * is their choice, and everything here has a working control — there is no item
+ * in the default layout that the editor cannot remove or edit.
+ *
+ * ## Why there is no battery row here
+ *
+ * There used to be one. It drew `--` on every frame, because no pack has ever
+ * reported a percentage to this app, and a default layout that leads with a
+ * placeholder reads as a broken reading rather than as an absent one. The
+ * battery item kind still exists and can still be added — it is honest, it
+ * draws `--` and it is marked as awaiting telemetry — but a *default* should
+ * show what works, and battery is the one bound kind with no source.
  *
  * Note the sizes: the title is the only double-height row, so the default
- * layout uses 4 of the 8 rows and leaves the panel's bottom half free.
+ * layout uses 5 of the 8 rows and leaves three free.
  */
 export function defaultLayout(): OledLayout {
   return {
@@ -163,6 +210,7 @@ export function defaultLayout(): OledLayout {
         visible: true,
         size: 'large',
         align: 'center',
+        timing: 'always',
       },
       {
         id: 'o1',
@@ -171,6 +219,7 @@ export function defaultLayout(): OledLayout {
         visible: true,
         size: 'normal',
         align: 'left',
+        timing: 'always',
       },
       {
         id: 'o2',
@@ -179,14 +228,16 @@ export function defaultLayout(): OledLayout {
         visible: true,
         size: 'normal',
         align: 'left',
+        timing: 'always',
       },
       {
         id: 'o3',
-        kind: 'battery',
+        kind: 'loading',
         label: '',
         visible: true,
         size: 'normal',
-        align: 'right',
+        align: 'left',
+        timing: 'always',
       },
     ],
     loadingStyle: 'dots',
@@ -237,6 +288,10 @@ export function oledReducer(layout: OledLayout, action: OledAction): OledLayout 
         visible: true,
         size: 'normal',
         align: 'left',
+        // New items join the running view. Starting an item in the startup view
+        // would make it vanish from the panel a moment after it was added, which
+        // reads as a bug rather than as a setting.
+        timing: 'always',
       };
       return { ...layout, items: [...layout.items, item], updatedAtMs: action.atMs };
     }
@@ -321,6 +376,15 @@ export function oledReducer(layout: OledLayout, action: OledAction): OledLayout 
         updatedAtMs: action.atMs,
       };
 
+    case 'setTiming':
+      return {
+        ...layout,
+        items: layout.items.map((item) =>
+          item.id === action.id ? { ...item, timing: action.timing } : item,
+        ),
+        updatedAtMs: action.atMs,
+      };
+
     case 'restoreAllHidden': {
       if (layout.items.every((item) => item.visible)) return layout;
       return {
@@ -356,6 +420,7 @@ export type OledAction =
   | { type: 'setVisible'; id: string; visible: boolean; atMs: number }
   | { type: 'setSize'; id: string; size: OledTextSize; atMs: number }
   | { type: 'setAlign'; id: string; align: OledAlign; atMs: number }
+  | { type: 'setTiming'; id: string; timing: OledItemTiming; atMs: number }
   | { type: 'restoreAllHidden'; atMs: number }
   | { type: 'setLoadingStyle'; style: OledLoadingStyle; atMs: number }
   | { type: 'setAnimationMs'; ms: number; atMs: number }
@@ -406,27 +471,45 @@ export interface OledFrame {
   readonly overflow: readonly OledItem[];
   /** Rows used, 0..8. */
   readonly rowsUsed: number;
+  /** The view this frame was built for. */
+  readonly phase: OledPhase;
 }
 
 /**
- * Places the layout's visible items on the panel grid.
+ * The items a given view draws, in panel order.
+ *
+ * Exported because two callers need the same answer and must not disagree: the
+ * frame builder below, and the animation timer, which has to know whether this
+ * view actually contains a loading indicator before it schedules a wake-up.
+ */
+export function visibleItems(layout: OledLayout, phase: OledPhase): OledItem[] {
+  return layout.items.filter(
+    (item) => item.visible && (item.timing === 'always' || phase === 'startup'),
+  );
+}
+
+/**
+ * Places the layout's visible items on the panel grid, for one of its two views.
  *
  * `frame` is the animation frame index, passed in rather than read from a
  * clock, which keeps this pure and makes the loading animation testable at an
  * exact frame.
+ *
+ * `phase` defaults to the running view, because that is what the panel shows
+ * for all but the first seconds of a session, and because a caller that has
+ * never heard of the startup view should get the ordinary one.
  */
 export function buildFrame(
   layout: OledLayout,
   values: OledValues,
   frame = 0,
+  phase: OledPhase = 'persistent',
 ): OledFrame {
   const rows: OledRow[] = [];
   const overflow: OledItem[] = [];
   let cursor = 0;
 
-  for (const item of layout.items) {
-    if (!item.visible) continue;
-
+  for (const item of visibleItems(layout, phase)) {
     const height = rowsFor(item);
     if (cursor + height > OLED_ROWS) {
       overflow.push(item);
@@ -450,7 +533,7 @@ export function buildFrame(
     cursor += height;
   }
 
-  return { rows, overflow, rowsUsed: cursor };
+  return { rows, overflow, rowsUsed: cursor, phase };
 }
 
 /**
@@ -520,6 +603,19 @@ export function hiddenCount(layout: OledLayout): number {
 
 /* ------------------------------------------------------------------ presets */
 
+/**
+ * ## Legacy: superseded by profiles
+ *
+ * A preset was a flat snapshot of the one layout the studio held. It could not
+ * say which glove it was for, and it had no per-hand on/off, which is what the
+ * product needs — a left and a right panel are configured separately.
+ *
+ * These three exports are kept for exactly one reason: a phone that has saved
+ * presets must not lose them on the upgrade. `useOledStudio` reads them once,
+ * converts each into a profile, and never writes them again. Nothing new
+ * should call `parsePresets`; see `./profiles.ts` for the model that replaced
+ * it.
+ */
 export const MAX_PRESETS = 6;
 
 export interface OledPreset {
@@ -556,6 +652,7 @@ const KIND_SET = new Set<string>(OLED_ITEM_KINDS);
 const ALIGN_SET = new Set<string>(OLED_ALIGNS);
 const SIZE_SET = new Set<string>(OLED_TEXT_SIZES);
 const LOADING_SET = new Set<string>(OLED_LOADING_STYLES);
+const TIMING_SET = new Set<string>(OLED_ITEM_TIMINGS);
 
 function pickString(value: unknown, fallback: string, maxLength: number): string {
   if (typeof value !== 'string') return fallback;
@@ -605,6 +702,14 @@ export function parseLayout(raw: unknown): OledLayout {
           typeof item.align === 'string' && ALIGN_SET.has(item.align)
             ? (item.align as OledAlign)
             : 'left',
+        // A layout written before the startup view existed has no timing on any
+        // item, and every one of those items was drawn for the whole session —
+        // so `always` is not merely the safe fallback here, it is what those
+        // items actually did.
+        timing:
+          typeof item.timing === 'string' && TIMING_SET.has(item.timing)
+            ? (item.timing as OledItemTiming)
+            : 'always',
       });
 
       if (items.length >= MAX_ITEM_COUNT) break;

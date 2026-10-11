@@ -58,6 +58,9 @@ function item(overrides: Partial<OledItem> = {}): OledItem {
     visible: true,
     size: 'normal',
     align: 'left',
+    // The running view, which is what most cases are about. The startup view has
+    // its own block below.
+    timing: 'always',
     ...overrides,
   };
 }

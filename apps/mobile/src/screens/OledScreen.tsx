@@ -26,20 +26,32 @@ import {
   isCustomised,
   MAX_ITEM_COUNT,
   MAX_LABEL_LENGTH,
-  MAX_PRESETS,
   OLED_HEIGHT,
   OLED_ITEM_KINDS,
   OLED_KIND_LABEL,
+  OLED_KIND_NEEDS_TELEMETRY,
   OLED_NO_VALUE,
   OLED_ROWS,
+  OLED_TIMING_LABEL,
   OLED_WIDTH,
   type OledAlign,
   type OledItem,
   type OledItemKind,
+  type OledItemTiming,
   type OledLoadingStyle,
+  type OledPhase,
   type OledTextSize,
   type OledValues,
 } from '../oled/layout';
+import {
+  clampIntroMs,
+  INTRO_DURATION_PRESETS,
+  MAX_INTRO_MS,
+  MAX_PROFILE_NAME,
+  MAX_PROFILES,
+  startupViewIsDistinct,
+  type OledProfile,
+} from '../oled/profiles';
 import { useOledFrame } from '../oled/useOledFrame';
 import { useOledStudio, type OledIntent } from '../oled/useOledStudio';
 import { oledValuesFrom } from '../oled/values';
@@ -70,6 +82,16 @@ const LOADING_OPTIONS: readonly { value: OledLoadingStyle; label: string }[] = [
   { value: 'none', label: 'None' },
 ];
 
+const TIMING_OPTIONS: readonly { value: OledItemTiming; label: string }[] = [
+  { value: 'always', label: 'Always' },
+  { value: 'startup', label: 'Startup only' },
+];
+
+const PHASE_OPTIONS: readonly { value: OledPhase; label: string }[] = [
+  { value: 'persistent', label: 'Running view' },
+  { value: 'startup', label: 'Startup view' },
+];
+
 /** Kinds whose text the user authors. Bound kinds read from live values. */
 const EDITABLE_KINDS: ReadonlySet<OledItemKind> = new Set(['title', 'text']);
 
@@ -79,8 +101,34 @@ const ALIGN_LABEL: Record<OledAlign, string> = {
   right: 'right',
 };
 
+/**
+ * Bytes one full frame occupies in the panel's own memory.
+ *
+ * 128 × 64 pixels at one bit per pixel. This is arithmetic on the geometry, not
+ * a measurement — it says how much a *single* frame costs, not how fast it can
+ * be sent. The transport's budget is unknown, which is exactly why the media
+ * section below refuses to promise a frame count or a playback rate.
+ */
+const FRAME_BYTES = (OLED_WIDTH * OLED_HEIGHT) / 8;
+
+/** What a name sheet is being used for. */
+type NameMode = 'create' | 'saveAsNew' | 'rename';
+
+/**
+ * The "no startup view" label.
+ *
+ * Deliberately not "Off": the word already means whether the *panel* is wanted
+ * on, and one screen using it for two unrelated settings is how a user ends up
+ * reading the wrong one.
+ */
+const NO_HOLD = 'No hold';
+/** A pending destructive action, held here so the dialog can name its target. */
+type Confirm =
+  | { readonly kind: 'restore' }
+  | { readonly kind: 'delete'; readonly id: string; readonly name: string };
+
 export interface OledScreenProps {
-  /** Injectable clock, so tests can assert preset timestamps without real time. */
+  /** Injectable clock, so tests can assert profile timestamps without real time. */
   now?: () => number;
 }
 
@@ -89,18 +137,23 @@ export interface OledScreenProps {
  *
  * ## What this is for
  *
- * Designing the layout the glove's 128×64 panel will show: which lines appear,
- * in what order, at what height, and what the loading indicator looks like.
+ * Designing what each glove's 128×64 panel will show: which lines appear, in
+ * what order, in which of the panel's two views, and how it starts up. Left and
+ * right are separate panels and are configured separately; a *profile* saves
+ * both of them together under one name.
  *
  * ## What it does not do
  *
  * It does not talk to hardware. There is no serialiser and no command encoder,
- * and no BLE characteristic has been verified — so nothing is sent anywhere, and
- * the preview is labelled **Demo Preview** in the header and in the notice above
- * the canvas. The brief is explicit that the app must not "pretend these
- * controls work on a physical glove without a verified firmware protocol", and
- * the way to honour that is a label on the thing itself rather than a warning
- * buried in a menu.
+ * and no BLE characteristic has been verified — so nothing is sent anywhere. Two
+ * things on this screen could be read as a hardware remote control and are
+ * therefore labelled where they appear rather than in a menu:
+ *
+ *  - the preview is marked **Demo Preview**, in the header and in the notice
+ *    above the canvas;
+ *  - each hand's on/off is labelled **desired**, and the panel's own state is
+ *    reported as *not reported* rather than inferred from that flag. A saved
+ *    `On` is not evidence the panel is lit.
  *
  * The panel geometry, however, is real: 128×64, a 6×8 glyph grid, 21 columns and
  * 8 rows, with `--` for values nothing has reported. A layout that overflows its
@@ -122,13 +175,33 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
   const { storage } = useAppState();
 
   const studio = useOledStudio(storage, now);
-  const { layout, presets, run, savePreset, applyPreset, deletePreset } = studio;
+  const {
+    profiles,
+    active,
+    isLoaded,
+    run,
+    setEnabled,
+    setIntro,
+    createProfile,
+    saveAsNew,
+    renameProfile,
+    duplicateProfile,
+    switchProfile,
+    deleteProfile,
+    restoreProfile,
+  } = studio;
 
   const [side, setSide] = useState<GloveSide>('right');
+  const [phase, setPhase] = useState<OledPhase>('persistent');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [presetSheetOpen, setPresetSheetOpen] = useState(false);
-  const [presetName, setPresetName] = useState('');
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [nameMode, setNameMode] = useState<NameMode | null>(null);
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+
+  const hand = active[side];
+  const { layout, intro } = hand;
 
   const glove = useGlove(side);
   // The shared outcome — there is no per-glove recogniser any more. `oledValuesFrom`
@@ -140,7 +213,7 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
 
   // The animation runs only while this screen is mounted — and since only the
   // active tab is mounted, that means only while the user is looking at it.
-  const frame = useOledFrame(layout, values, true);
+  const frame = useOledFrame(layout, values, true, phase);
 
   const scale = useMemo(() => {
     const available = width - 2 * screenLayout.screenPadding - 4 * spacing.sm;
@@ -155,21 +228,36 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
   const hidden = hiddenCount(layout);
   const customised = isCustomised(layout);
   const atCapacity = layout.items.length >= MAX_ITEM_COUNT;
+  const handName = side === 'left' ? 'Left' : 'Right';
 
-  const dispatch = useCallback((intent: OledIntent) => run(intent), [run]);
+  const startupOnly = layout.items.filter(
+    (item) => item.timing === 'startup' && item.visible,
+  ).length;
+
+  const dispatch = useCallback((intent: OledIntent) => run(side, intent), [run, side]);
 
   const closeEditor = useCallback(() => setEditingId(null), []);
 
-  const closePresetSheet = useCallback(() => {
-    setPresetSheetOpen(false);
-    setPresetName('');
+  const closeNameSheet = useCallback(() => {
+    setNameMode(null);
+    setRenameTarget(null);
+    setDraftName('');
   }, []);
 
-  const commitPreset = useCallback(() => {
-    savePreset(presetName);
-    setPresetName('');
-    setPresetSheetOpen(false);
-  }, [presetName, savePreset]);
+  const commitName = useCallback(() => {
+    const name = draftName.trim();
+    if (name.length === 0) return;
+    if (nameMode === 'create') createProfile(name);
+    if (nameMode === 'saveAsNew') saveAsNew(name);
+    if (nameMode === 'rename' && renameTarget !== null) renameProfile(renameTarget, name);
+    closeNameSheet();
+  }, [closeNameSheet, createProfile, draftName, nameMode, renameProfile, renameTarget, saveAsNew]);
+
+  const openNameSheet = useCallback((mode: NameMode, target: string | null, initial: string) => {
+    setNameMode(mode);
+    setRenameTarget(target);
+    setDraftName(initial);
+  }, []);
 
   return (
     <Screen scroll bottomInset={screenLayout.tabBarHeight} testID="oled-screen">
@@ -190,30 +278,112 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
             Demo Preview
           </AppText>
           <AppText variant="caption" color={palette.textSecondary}>
-            Nothing here is sent to hardware. No OLED command set and no BLE characteristic
-            has been verified, so a physical panel will not change until firmware exists.
+            {isLoaded
+              ? 'Nothing here is sent to hardware. No OLED command set and no BLE characteristic has been verified, so a physical panel will not change until firmware exists.'
+              : 'Reading your saved profiles…'}
           </AppText>
         </View>
       </Card>
 
-      <View style={styles.sideSelector}>
-        <AppText variant="caption" color={palette.textMuted}>
-          Previewing values from
-        </AppText>
-        <SegmentedControl
-          options={SIDE_OPTIONS}
-          value={side}
-          onChange={setSide}
-          accessibilityLabel="Which glove's values the preview shows"
+      {/* ------------------------------------------------------------ profile */}
+
+      <SectionHeader
+        label="Profile"
+        detail={`${profiles.length} of ${MAX_PROFILES}`}
+      />
+
+      <Card style={styles.card}>
+        <View style={styles.cardHead}>
+          <View style={styles.cardHeadText}>
+            <AppText variant="label" numberOfLines={1}>
+              {active.name}
+            </AppText>
+            <AppText variant="caption" color={palette.textMuted}>
+              Left and right panel configurations are saved together in a profile.
+            </AppText>
+          </View>
+          <Badge label="Active" tone="accent" />
+        </View>
+
+        <ActionButton
+          label="Manage profiles"
+          tone="secondary"
+          icon="eye"
+          onPress={() => setProfilesOpen(true)}
+          accessibilityLabel="Manage OLED profiles"
+          accessibilityHint="Create, rename, duplicate, switch, delete or restore a profile"
         />
-      </View>
+      </Card>
+
+      {/* -------------------------------------------------------- which hand */}
+
+      <SectionHeader label="Panel" detail={`Editing the ${handName.toLowerCase()} glove`} />
+
+      {/*
+        This is a per-hand *editor*, not a mode the rest of the app inherits: the
+        Dashboard shows both hands at once and needs no chooser. Left and right
+        are separate physical panels, so configuring one at a time is the honest
+        shape for the work.
+      */}
+      <SegmentedControl
+        options={SIDE_OPTIONS}
+        value={side}
+        onChange={setSide}
+        accessibilityLabel="Which glove's panel to edit"
+      />
+
+      <Card style={styles.card}>
+        <View style={styles.stateRow}>
+          <View style={styles.stateRowText}>
+            <AppText variant="body">{handName} panel desired</AppText>
+            <AppText variant="caption" color={palette.textMuted}>
+              A saved On is a desired setting, not a report from the hardware.
+            </AppText>
+          </View>
+          <Toggle
+            value={hand.enabled}
+            onValueChange={(next) => setEnabled(side, next)}
+            accessibilityLabel={`Desired: ${handName.toLowerCase()} panel on`}
+          />
+        </View>
+
+        <View style={styles.divider} />
+
+        <Detail label="Desired" value={hand.enabled ? 'On' : 'Off'} />
+        <Detail
+          label="Reported by the panel"
+          value="Not reported"
+          note="No OLED command set and no read-back have been verified, so the app cannot know whether this panel is lit."
+        />
+      </Card>
+
+      {/* ---------------------------------------------------------- preview */}
+
+      <SectionHeader label="Preview" />
+
+      <SegmentedControl
+        options={PHASE_OPTIONS}
+        value={phase}
+        onChange={setPhase}
+        accessibilityLabel="Which panel view to preview"
+      />
 
       <OledCanvas frame={frame} scale={scale} testID="oled-canvas" />
 
       <AppText variant="caption" color={palette.textMuted} center>
-        Shown at {scale.toFixed(1)}× · {columnsFor('normal')} columns × {OLED_ROWS} rows of 6×8
-        cells · letterforms come from the platform monospace face, not the panel's own font
+        {phase === 'startup' ? 'Startup view' : 'Running view'} at {scale.toFixed(1)}× ·{' '}
+        {columnsFor('normal')} columns × {OLED_ROWS} rows of 6×8 cells · letterforms come from the
+        platform monospace face, not the panel's own font
       </AppText>
+
+      {phase === 'persistent' && startupOnly > 0 && (
+        <AppText variant="caption" color={palette.textMuted}>
+          {startupOnly === 1
+            ? '1 item belongs to the startup view, so it is not drawn here.'
+            : `${startupOnly} items belong to the startup view, so they are not drawn here.`}{' '}
+          Switch to the Startup view to see them.
+        </AppText>
+      )}
 
       {frame.overflow.length > 0 && (
         <Card style={[styles.notice, { borderColor: palette.warning }]}>
@@ -225,10 +395,10 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
                 : `${frame.overflow.length} items do not fit`}
             </AppText>
             <AppText variant="caption" color={palette.textSecondary}>
-              The panel has {OLED_ROWS} rows and {frame.rowsUsed} are used, so these are not
+              This view has {OLED_ROWS} rows and {frame.rowsUsed} are used, so these are not
               drawn — and would not be drawn on a physical panel either:{' '}
               {frame.overflow.map((item) => OLED_KIND_LABEL[item.kind]).join(', ')}. Hide
-              something, remove it, or make a line single height.
+              something, remove it, or move it to the other view.
             </AppText>
           </View>
         </Card>
@@ -278,7 +448,7 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
           // Same wording as the visible label, pluralised the same way: a
           // screen reader should not hear "1 hidden items".
           accessibilityLabel={`Restore ${hidden} hidden ${hidden === 1 ? 'item' : 'items'}`}
-          accessibilityHint="Shows every hidden item on the panel again"
+          accessibilityHint="Shows every hidden item in the panel view again"
         />
       )}
 
@@ -304,8 +474,85 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         <AppText variant="caption" color={palette.textMuted}>
           {atCapacity
             ? `The layout holds ${MAX_ITEM_COUNT} items. Remove one to add another.`
-            : 'Every item can be reordered, hidden, retyped and removed from its own editor.'}
+            : 'Every item can be reordered, hidden, retyped, moved between views and removed from its own editor.'}
         </AppText>
+
+        <AppText variant="caption" color={palette.textMuted}>
+          Battery is the one item with no source: no pack has ever reported a percentage to this
+          app, so it draws {OLED_NO_VALUE} and is marked as awaiting telemetry.
+        </AppText>
+      </Card>
+
+      {/* --------------------------------------------------- startup view */}
+
+      <SectionHeader label="Startup view" />
+      <Card style={styles.card}>
+        <View style={styles.stateRow}>
+          <View style={styles.stateRowText}>
+            <AppText variant="body">Hold the startup view</AppText>
+            <AppText variant="caption" color={palette.textMuted}>
+              How long the {handName.toLowerCase()} panel stays on startup content before the
+              running view takes over. Requires firmware support for a startup view.
+            </AppText>
+          </View>
+          <AppText variant="reading">
+            {intro.durationMs === 0 ? NO_HOLD : formatDuration(intro.durationMs)}
+          </AppText>
+        </View>
+
+        <SegmentedControl
+          options={INTRO_DURATION_PRESETS.map((ms) => ({
+            value: String(ms),
+            label: ms === 0 ? NO_HOLD : formatDuration(ms),
+          }))}
+          /*
+           * A stored hold need not be one of the presets — the field below takes
+           * any value in range. Passing the empty string then leaves nothing
+           * highlighted, which is the honest state: none of these four *is* the
+           * setting. Highlighting the nearest one would show a value the user
+           * did not choose.
+           */
+          value={introDurationPreset(intro.durationMs)}
+          onChange={(value) => setIntro(side, { durationMs: clampIntroMs(Number(value)) })}
+          accessibilityLabel="Startup view hold duration"
+        />
+
+        <TextField
+          label="Exact hold, in milliseconds"
+          value={String(intro.durationMs)}
+          onChangeText={(text) => {
+            const parsed = Number(text.replace(/[^0-9]/g, ''));
+            setIntro(side, { durationMs: clampIntroMs(parsed) });
+          }}
+          keyboardType="number-pad"
+          maxLength={5}
+          hint={`Between 0 and ${MAX_INTRO_MS}. Saved as you type; anything outside the range is brought to the nearest end.`}
+        />
+
+        <View style={styles.stateRow}>
+          <View style={styles.stateRowText}>
+            <AppText variant="body">Animate the loading indicator</AppText>
+            <AppText variant="caption" color={palette.textMuted}>
+              A moving indicator is the only animation an SSD1306 can express without a
+              converted bitmap sequence.
+            </AppText>
+          </View>
+          <Toggle
+            value={intro.animate}
+            onValueChange={(next) => setIntro(side, { animate: next })}
+            accessibilityLabel="Animate the loading indicator during the startup view"
+          />
+        </View>
+
+        {intro.durationMs > 0 && !startupViewIsDistinct(layout) && (
+          <View style={[styles.inlineWarn, { borderColor: palette.warning }]}>
+            <Icon name="warning" size={14} color={palette.warning} />
+            <AppText variant="caption" color={palette.textSecondary} style={styles.inlineWarnText}>
+              No item is set to Startup only, so the startup view is identical to the running
+              view and this hold changes nothing. Set an item's timing, or set the hold to Off.
+            </AppText>
+          </View>
+        )}
       </Card>
 
       {/* --------------------------------------------------------- animation */}
@@ -319,7 +566,7 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
           accessibilityLabel="Loading indicator style"
         />
 
-        <View style={styles.speedRow}>
+        <View style={styles.stateRow}>
           <AppText variant="body">Frame period</AppText>
           <AppText variant="reading">{formatDuration(layout.animationMs)}</AppText>
         </View>
@@ -337,80 +584,61 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         <AppText variant="caption" color={palette.textMuted}>
           {layout.loadingStyle === 'none'
             ? 'No indicator is drawn, so no timer runs.'
-            : 'The frame counter runs only while this screen is open and the layout has a visible loading item. Leaving the tab stops it rather than hiding a running one.'}
+            : 'The frame counter runs only while this screen is open and this view has a visible loading item. Leaving the tab stops it rather than hiding a running one.'}
         </AppText>
       </Card>
 
-      {/* ----------------------------------------------------------- presets */}
+      {/* ------------------------------------------------------------- media */}
 
-      <SectionHeader label="Presets" detail={`${presets.length} of ${MAX_PRESETS}`} />
-
-      {presets.length === 0 ? (
-        <Card style={styles.emptyCard}>
-          <AppText variant="body" color={palette.textSecondary} center>
-            No presets saved. A preset is a copy of the current layout, so editing the layout
-            afterwards leaves it unchanged.
-          </AppText>
-        </Card>
-      ) : (
-        <View style={styles.group}>
-          {presets.map((preset, index) => (
-            <ListRow
-              key={preset.id}
-              label={preset.name}
-              description={`${preset.layout.items.length} items · ${formatDate(
-                preset.createdAtMs,
-              )}`}
-              icon="clock"
-              last={index === presets.length - 1}
-              accessory={
-                <View style={styles.presetActions}>
-                  <ActionButton
-                    label="Load"
-                    compact
-                    tone="secondary"
-                    onPress={() => applyPreset(preset.id)}
-                    accessibilityLabel={`Load preset ${preset.name}`}
-                  />
-                  <IconButton
-                    icon="trash"
-                    tone="danger"
-                    onPress={() => deletePreset(preset.id)}
-                    accessibilityLabel={`Delete preset ${preset.name}`}
-                  />
-                </View>
-              }
-            />
-          ))}
+      <SectionHeader label="Images and animations" />
+      {/*
+        Deliberately a notice and not a picker. No image decoder or dithering step
+        exists in this build, so a control here would open a picker and produce
+        nothing. The constraint below is the part that is real — the panel's own
+        geometry — and the rest says the conversion is absent. The workflow that
+        would fill this in, and the verification it is blocked on, are recorded in
+        `docs/oled-media.md`.
+      */}
+      <Card style={styles.card}>
+        <View style={styles.cardHead}>
+          <AppText variant="label">Bitmap and frame-sequence items</AppText>
+          <Badge label="Not implemented" tone="warning" />
         </View>
-      )}
+
+        <AppText variant="caption" color={palette.textSecondary}>
+          A still image has to be converted to a monochrome 128×64 bitmap, and a short animation
+          to a sequence of those bitmaps. That conversion is not part of this build: there is no
+          image decoder or dithering step in the app, and no converted frame has ever been
+          produced, so there is nothing here to preview and no control that would pretend
+          otherwise.
+        </AppText>
+
+        <AppText variant="caption" color={palette.textMuted}>
+          What is fixed by the hardware: 128 × 64 pixels at one bit per pixel, so one full frame
+          is {FRAME_BYTES} bytes before any framing the transport adds. How many of those frames
+          fit, and how fast they can be sent, depends on a firmware transport that has not been
+          verified — so no frame count or playback rate is promised here.
+        </AppText>
+      </Card>
 
       <View style={styles.footerActions}>
         <ActionButton
-          label="Save as preset"
-          tone="secondary"
-          icon="plus"
-          onPress={() => setPresetSheetOpen(true)}
-          accessibilityLabel="Save current layout as a preset"
-        />
-        <ActionButton
-          label="Reset layout"
+          label="Restore defaults"
           tone="ghost"
           icon="refresh"
           disabled={!customised}
-          onPress={() => setConfirmReset(true)}
-          accessibilityLabel="Reset layout to defaults"
+          onPress={() => setConfirm({ kind: 'restore' })}
+          accessibilityLabel="Restore this profile's defaults"
           accessibilityHint={
             customised
-              ? 'Asks for confirmation, because it discards your changes'
-              : 'The layout is already at its defaults'
+              ? 'Asks for confirmation, because it discards both hands of this profile'
+              : 'Both hands of this profile are already at their defaults'
           }
         />
       </View>
 
       <AppText variant="caption" color={palette.textMuted}>
-        A value with nothing behind it is drawn as {OLED_NO_VALUE}, not as a zero. The battery
-        line always reads {OLED_NO_VALUE} — no pack has ever reported to this app.
+        A value with nothing behind it is drawn as {OLED_NO_VALUE}, not as a zero.
       </AppText>
 
       {/* ------------------------------------------------------------ sheets */}
@@ -423,35 +651,63 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         onDispatch={dispatch}
       />
 
+      <ProfilesSheet
+        visible={profilesOpen}
+        onClose={() => setProfilesOpen(false)}
+        profiles={profiles}
+        activeId={active.id}
+        onSwitch={switchProfile}
+        onDuplicate={duplicateProfile}
+        onDelete={(id, name) => {
+          setProfilesOpen(false);
+          setConfirm({ kind: 'delete', id, name });
+        }}
+        onRename={(id, name) => openNameSheet('rename', id, name)}
+        onCreate={() => openNameSheet('create', null, '')}
+        onSaveAsNew={() => openNameSheet('saveAsNew', null, `${active.name} copy`)}
+      />
+
       <Sheet
-        visible={presetSheetOpen}
-        onClose={closePresetSheet}
-        title="Save preset"
-        description={`Stores a copy of the current layout. The newest ${MAX_PRESETS} are kept.`}
+        visible={nameMode !== null}
+        onClose={closeNameSheet}
+        title={
+          nameMode === 'rename'
+            ? 'Rename profile'
+            : nameMode === 'create'
+              ? 'New profile'
+              : 'Save as a new profile'
+        }
+        description={
+          nameMode === 'create'
+            ? `Starts from the defaults for both hands. The newest ${MAX_PROFILES} profiles are kept.`
+            : nameMode === 'saveAsNew'
+              ? 'Copies both hands of this profile into a new one, which then becomes active.'
+              : 'Renames this profile only. No other saved profile is touched.'
+        }
         footer={
           <>
             <ActionButton
-              label="Save preset"
-              onPress={commitPreset}
-              disabled={presetName.trim().length === 0}
+              label={nameMode === 'rename' ? 'Rename' : 'Save profile'}
+              onPress={commitName}
+              disabled={draftName.trim().length === 0}
             />
-            <ActionButton label="Cancel" tone="ghost" onPress={closePresetSheet} />
+            <ActionButton label="Cancel" tone="ghost" onPress={closeNameSheet} />
           </>
         }
       >
         <TextField
-          label="Preset name"
-          value={presetName}
-          onChangeText={setPresetName}
+          label="Profile name"
+          value={draftName}
+          onChangeText={setDraftName}
           placeholder="Evening class"
-          maxLength={24}
+          maxLength={MAX_PROFILE_NAME}
           autoFocus
           hint={
-            presetName.trim().length === 0
+            draftName.trim().length === 0
               ? 'A name is required'
-              : `${presetName.trim().length}/24`
+              : `${draftName.trim().length}/${MAX_PROFILE_NAME}`
           }
-          invalid={presetName.trim().length === 0}
+          invalid={draftName.trim().length === 0}
         />
       </Sheet>
 
@@ -460,29 +716,210 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         rather than asking a generic "are you sure?".
       */}
       <ConfirmDialog
-        visible={confirmReset}
-        title="Reset layout?"
-        message={
-          hidden > 0
-            ? `This discards your layout and restores the default one, including bringing back ${hidden} hidden ${
-                hidden === 1 ? 'item' : 'items'
-              }. Saved presets are kept.`
-            : 'This discards your layout and restores the default one. Saved presets are kept.'
-        }
-        confirmLabel="Reset"
-        cancelLabel="Keep my layout"
+        visible={confirm !== null}
+        title={confirm?.kind === 'delete' ? 'Delete this profile?' : 'Restore defaults?'}
+        message={confirmMessage(confirm, active.name, hidden)}
+        confirmLabel={confirm?.kind === 'delete' ? 'Delete' : 'Restore'}
+        cancelLabel={confirm?.kind === 'delete' ? 'Keep it' : 'Keep my layout'}
         destructive
         onConfirm={() => {
-          dispatch({ type: 'reset' });
-          setConfirmReset(false);
+          if (confirm?.kind === 'delete') deleteProfile(confirm.id);
+          if (confirm?.kind === 'restore') restoreProfile(active.id);
+          setConfirm(null);
         }}
-        onCancel={() => setConfirmReset(false)}
+        onCancel={() => setConfirm(null)}
       />
     </Screen>
   );
 }
 
+/** What each confirmation is about to discard, said in full. */
+function confirmMessage(confirm: Confirm | null, activeName: string, hidden: number): string {
+  if (confirm?.kind === 'delete') {
+    return `This removes the profile "${confirm.name}" from this device, including both of its panel configurations. No other profile is changed.`;
+  }
+  return hidden > 0
+    ? `This discards both hands of "${activeName}" and restores the default layout, including bringing back ${hidden} hidden ${
+        hidden === 1 ? 'item' : 'items'
+      }. Other profiles are kept.`
+    : `This discards both hands of "${activeName}" and restores the default layout. Other profiles are kept.`;
+}
+
 /* --------------------------------------------------------------- sub-parts */
+
+/** A label and a value, with an optional explanation underneath. */
+function Detail({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+}): React.JSX.Element {
+  const styles = useStyles(makeStyles);
+  const { palette } = useTheme();
+
+  return (
+    <View style={styles.detail}>
+      <View style={styles.detailHead}>
+        <AppText variant="caption" color={palette.textSecondary}>
+          {label}
+        </AppText>
+        <AppText variant="label">{value}</AppText>
+      </View>
+      {note !== undefined && (
+        <AppText variant="caption" color={palette.textMuted}>
+          {note}
+        </AppText>
+      )}
+    </View>
+  );
+}
+
+/**
+ * The profile list, and everything that can be done to a profile.
+ *
+ * ## Why the row actions are labelled buttons and not icons
+ *
+ * There is no pencil in the icon set, and reaching for a wrong glyph — `link`,
+ * `info` — to mean "rename" would make the control unguessable. So the two
+ * per-row actions that exist say what they are. Everything else acts on the
+ * active profile from the footer: switching to a profile and then operating on
+ * it is one extra tap, and it means a destructive action is always taken against
+ * the profile the user is looking at.
+ */
+function ProfilesSheet({
+  visible,
+  onClose,
+  profiles,
+  activeId,
+  onSwitch,
+  onDuplicate,
+  onDelete,
+  onRename,
+  onCreate,
+  onSaveAsNew,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  profiles: readonly OledProfile[];
+  activeId: string;
+  onSwitch: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onDelete: (id: string, name: string) => void;
+  onRename: (id: string, name: string) => void;
+  onCreate: () => void;
+  onSaveAsNew: () => void;
+}): React.JSX.Element {
+  const styles = useStyles(makeStyles);
+  const { palette } = useTheme();
+  const full = profiles.length >= MAX_PROFILES;
+  const active = profiles.find((profile) => profile.id === activeId);
+  const lastOne = profiles.length <= 1;
+
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      title="Profiles"
+      description="A profile holds both panels. Switching profiles changes which one is being edited and saved — nothing is sent to a glove either way."
+      footer={
+        <>
+          <ActionButton
+            label="New profile"
+            icon="plus"
+            onPress={onCreate}
+            disabled={full}
+            accessibilityLabel="Create a new profile"
+          />
+          <ActionButton
+            label="Save as a new profile"
+            tone="secondary"
+            onPress={onSaveAsNew}
+            disabled={full}
+            accessibilityLabel="Save the active profile as a new one"
+          />
+          <ActionButton
+            label={active === undefined ? 'Delete profile' : `Delete ${active.name}`}
+            tone="danger"
+            // The last profile cannot be removed: every hand must have a
+            // configuration, and an empty set has no active member.
+            disabled={lastOne || active === undefined}
+            onPress={() => {
+              if (active !== undefined) onDelete(active.id, active.name);
+            }}
+            accessibilityLabel="Delete the active profile"
+            accessibilityHint={
+              lastOne
+                ? 'This is the only profile, so it cannot be deleted'
+                : 'Asks for confirmation, because both of its panel configurations are removed'
+            }
+          />
+        </>
+      }
+    >
+      {full && (
+        <AppText variant="caption" color={palette.warning}>
+          {MAX_PROFILES} profiles is the limit. Delete one to create another.
+        </AppText>
+      )}
+
+      <View style={styles.group}>
+        {profiles.map((profile, index) => {
+          const isActive = profile.id === activeId;
+          return (
+            <ListRow
+              key={profile.id}
+              label={profile.name}
+              description={profileDetail(profile)}
+              icon={isActive ? 'check' : 'clock'}
+              onPress={isActive ? undefined : () => onSwitch(profile.id)}
+              disabled={isActive}
+              last={index === profiles.length - 1}
+              accessory={
+                <View style={styles.rowActions}>
+                  {isActive ? (
+                    <ActionButton
+                      label="Rename"
+                      tone="ghost"
+                      compact
+                      onPress={() => onRename(profile.id, profile.name)}
+                      accessibilityLabel={`Rename profile ${profile.name}`}
+                    />
+                  ) : (
+                    <ActionButton
+                      label="Duplicate"
+                      tone="ghost"
+                      compact
+                      disabled={full}
+                      onPress={() => onDuplicate(profile.id)}
+                      accessibilityLabel={`Duplicate profile ${profile.name}`}
+                    />
+                  )}
+                </View>
+              }
+            />
+          );
+        })}
+      </View>
+
+      {lastOne && (
+        <AppText variant="caption" color={palette.textMuted}>
+          The last profile cannot be deleted. Create another first if you want to replace this
+          one.
+        </AppText>
+      )}
+    </Sheet>
+  );
+}
+
+function profileDetail(profile: OledProfile): string {
+  const left = profile.left.enabled ? 'on' : 'off';
+  const right = profile.right.enabled ? 'on' : 'off';
+  const items = profile.left.layout.items.length + profile.right.layout.items.length;
+  return `Desired: left ${left}, right ${right} · ${items} items across both panels`;
+}
 
 function ItemRow({
   item,
@@ -512,7 +949,9 @@ function ItemRow({
           : item.size === 'large'
             ? 'Double height'
             : 'Single height'
-      } · ${ALIGN_LABEL[item.align]} · ${item.visible ? 'shown' : 'hidden'}`}
+      } · ${ALIGN_LABEL[item.align]} · ${OLED_TIMING_LABEL[item.timing]} · ${
+        item.visible ? 'shown' : 'hidden'
+      }`}
       icon={item.visible ? 'eye' : 'eyeOff'}
       onPress={onPress}
       last={last}
@@ -631,6 +1070,20 @@ function ItemEditor({
           </View>
         )}
 
+        {OLED_KIND_NEEDS_TELEMETRY.has(shown.kind) && (
+          <View style={[styles.editorNote, { backgroundColor: palette.surfaceSunken }]}>
+            <Icon name="warning" size={14} color={palette.warning} />
+            <AppText
+              variant="caption"
+              color={palette.textSecondary}
+              style={styles.editorNoteText}
+            >
+              No battery telemetry exists yet, so this row draws a placeholder on every frame
+              rather than a percentage.
+            </AppText>
+          </View>
+        )}
+
         {shown.kind !== 'loading' && (
           <>
             <AppText variant="caption" color={palette.textMuted} style={styles.editorLabel}>
@@ -655,6 +1108,21 @@ function ItemEditor({
           </>
         )}
 
+        <AppText variant="caption" color={palette.textMuted} style={styles.editorLabel}>
+          Which view this row belongs to
+        </AppText>
+        <SegmentedControl
+          options={TIMING_OPTIONS}
+          value={shown.timing}
+          onChange={(timing) => onDispatch({ type: 'setTiming', id: shown.id, timing })}
+          accessibilityLabel="Which panel view this row belongs to"
+        />
+        <AppText variant="caption" color={palette.textMuted}>
+          {shown.timing === 'startup'
+            ? 'Drawn only while the panel is showing its startup content. The running view will not draw it.'
+            : 'Drawn in both views, so it is present from power-on onwards.'}
+        </AppText>
+
         <View style={styles.editorRow}>
           <View style={styles.editorRowText}>
             <AppText variant="body">Shown on the panel</AppText>
@@ -677,7 +1145,7 @@ function ItemEditor({
               is always one position.
             </AppText>
           </View>
-          <View style={styles.editorRowActions}>
+          <View style={styles.rowActions}>
             <IconButton
               icon="arrowUp"
               onPress={() => onDispatch({ type: 'move', id: shown.id, direction: 'up' })}
@@ -772,10 +1240,15 @@ function nearestSpeed(ms: number): number {
   );
 }
 
-/** Short date for a preset row. Locale-dependent, unlike anything on the panel. */
-function formatDate(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return 'date unknown';
-  return new Date(ms).toLocaleDateString();
+/**
+ * The preset that *is* this hold, or the empty string when none is.
+ *
+ * Returning `''` rather than the nearest preset is the difference between "you
+ * chose the 1 s preset" and "your hold is 1300 ms, which is not one of these".
+ * The latter is true and the former is not, so nothing is highlighted.
+ */
+function introDurationPreset(ms: number): string {
+  return INTRO_DURATION_PRESETS.some((preset) => preset === ms) ? String(ms) : '';
 }
 
 const makeStyles = (palette: Palette) =>
@@ -790,11 +1263,6 @@ const makeStyles = (palette: Palette) =>
       flex: 1,
       gap: 2,
     },
-    sideSelector: {
-      // Stacked for the same measured reason as the Dashboard's `scopeSelector`:
-      // the caption and this control do not share a line without overflowing.
-      gap: spacing.sm,
-    },
     card: {
       gap: spacing.md,
     },
@@ -803,6 +1271,10 @@ const makeStyles = (palette: Palette) =>
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.sm,
+    },
+    cardHeadText: {
+      flex: 1,
+      gap: 2,
     },
     emptyCard: {
       alignItems: 'center',
@@ -836,15 +1308,43 @@ const makeStyles = (palette: Palette) =>
     chipDisabled: {
       opacity: 0.4,
     },
-    presetActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: palette.border,
     },
-    speedRow: {
+    detail: {
+      gap: 2,
+    },
+    detailHead: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
+    inlineWarn: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+      padding: spacing.md,
+      borderRadius: radii.sm,
+      borderWidth: 1,
+    },
+    inlineWarnText: {
+      flex: 1,
+    },
+    stateRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
+    stateRowText: {
+      flex: 1,
+      gap: 2,
+    },
+    rowActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
     },
     footerActions: {
       gap: spacing.sm,
@@ -874,9 +1374,5 @@ const makeStyles = (palette: Palette) =>
     editorRowText: {
       flex: 1,
       gap: 2,
-    },
-    editorRowActions: {
-      flexDirection: 'row',
-      gap: spacing.sm,
     },
   });

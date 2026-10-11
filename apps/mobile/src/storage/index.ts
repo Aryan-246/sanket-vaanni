@@ -32,9 +32,17 @@ const KEYS = {
    * OLED Studio state. Kept as opaque JSON here rather than typed in this
    * module so that `storage` does not have to depend on the editor's shape;
    * the editor owns the schema and the migration, this module owns the bytes.
+   *
+   * `oledLayout` and `oledPresets` are **legacy**: they held the single layout
+   * and the flat preset list that the per-hand profile model replaced. They are
+   * read once at startup to migrate existing work into `oledProfiles`, and are
+   * deliberately never written again and never deleted — a bug in the migration
+   * should leave the original data recoverable.
    */
   oledLayout: 'sv/v1/oled-layout',
   oledPresets: 'sv/v1/oled-presets',
+  /** The profile set and which profile is active. Written atomically together. */
+  oledProfiles: 'sv/v1/oled-profiles',
 } as const;
 
 /**
@@ -222,4 +230,5 @@ export const storageKeys = KEYS;
 export const featureKeys = {
   oledLayout: KEYS.oledLayout,
   oledPresets: KEYS.oledPresets,
+  oledProfiles: KEYS.oledProfiles,
 } as const;

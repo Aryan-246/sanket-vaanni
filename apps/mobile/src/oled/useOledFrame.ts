@@ -8,32 +8,49 @@
  * whole job is to start it, stop it, and keep it from running when it would do
  * nothing.
  *
- * It is stopped in three cases, because each is a real waste otherwise:
+ * It is stopped in four cases, because each is a real waste otherwise:
  *
  *  - the screen is showing a still preview (`animate` is false);
  *  - the layout has no loading indicator to animate;
+ *  - the layout has one, but it belongs to the other view — a startup-only
+ *    indicator must not keep the timer awake while the running view is shown;
  *  - the component unmounts — which, since only the active tab is mounted, is
  *    what happens when the user leaves the OLED tab.
  *
  * The interval period is the user's own animation duration, so a slow setting
  * costs four times fewer wake-ups than a fast one rather than the app choosing
  * a fixed rate and throttling the result.
+ *
+ * ## Phase
+ *
+ * The panel has a startup view and a running view, and an item can belong to
+ * only one of them. Both the animation decision and the frame itself therefore
+ * take the phase, so the preview cannot animate an indicator that this view does
+ * not draw.
  */
 import { useEffect, useState } from 'react';
 
-import { buildFrame, type OledFrame, type OledLayout, type OledValues } from './layout';
+import {
+  buildFrame,
+  visibleItems,
+  type OledFrame,
+  type OledLayout,
+  type OledPhase,
+  type OledValues,
+} from './layout';
 
 export function useOledFrame(
   layout: OledLayout,
   values: OledValues,
   animate: boolean,
+  phase: OledPhase = 'persistent',
 ): OledFrame {
   const [frame, setFrame] = useState(0);
 
   const wantsAnimation =
     animate &&
     layout.loadingStyle !== 'none' &&
-    layout.items.some((item) => item.visible && item.kind === 'loading');
+    visibleItems(layout, phase).some((item) => item.kind === 'loading');
 
   const periodMs = layout.animationMs;
 
@@ -52,5 +69,5 @@ export function useOledFrame(
     return () => clearInterval(timer);
   }, [wantsAnimation, periodMs]);
 
-  return buildFrame(layout, values, frame);
+  return buildFrame(layout, values, frame, phase);
 }

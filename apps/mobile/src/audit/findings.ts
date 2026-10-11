@@ -99,7 +99,6 @@ export function allHealthy(findings: readonly Finding[]): boolean {
 export interface GloveAuditInput {
   readonly snapshot: GloveSnapshot;
   readonly calibration: CalibrationProfile;
-  readonly outcome: RecognitionOutcome;
   readonly nowMs: number;
 }
 
@@ -110,9 +109,18 @@ export interface GloveAuditInput {
  * not reported on — so the screen does not reshuffle as state changes. Rows are
  * not sorted by severity on purpose: a list that reorders itself under the
  * reader's finger is worse than one that is merely unsorted.
+ *
+ * ## Why there is no recognition row here
+ *
+ * There used to be one per glove, because recognition used to be per glove: the
+ * screen picked a hand and asked about that hand. It no longer is. One outcome is
+ * computed for the conversation, from whichever hands the vocabulary requires,
+ * and a per-glove copy of it would either duplicate the same sentence twice or
+ * attribute a two-handed sign to one hand. It moved to `appFindings`, where the
+ * single shared outcome is described once.
  */
 export function gloveFindings(input: GloveAuditInput): Finding[] {
-  const { snapshot, calibration, outcome, nowMs } = input;
+  const { snapshot, calibration, nowMs } = input;
   const side = snapshot.side;
   const hand = side === 'left' ? 'Left' : 'Right';
   const { link } = snapshot;
@@ -240,9 +248,6 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
       'No telemetry frame carries a battery reading, and no command to read one has been verified. A percentage here would be an invention.',
   });
 
-  /* 11 — recognition, for this glove's current sample. */
-  findings.push(recognitionFinding(side, outcome));
-
   return findings;
 }
 
@@ -298,58 +303,78 @@ function isFiniteReading(value: number): boolean {
   return Number.isFinite(value);
 }
 
-function recognitionFinding(side: GloveSide, outcome: RecognitionOutcome): Finding {
+/**
+ * Recognition, as one row about the shared outcome rather than one per glove.
+ *
+ * Each of the six states is a different answer and none of them is "waiting".
+ * The two that could be mistaken for a fault — `idle` and `no-result` — are
+ * labelled `unknown` and `healthy` respectively, because neither is a failure:
+ * one means nothing was evaluated, the other means something was and matched
+ * nothing. A blocked state is the only one the user can act on, so it is the only
+ * one whose detail names a next step.
+ */
+function recognitionFinding(outcome: RecognitionOutcome): Finding {
+  const base = { key: 'app.recognition', label: 'Recognition and model' } as const;
+
   switch (outcome.kind) {
     case 'unavailable':
+      return { ...base, state: 'unavailable', detail: outcome.reason };
+
+    case 'blocked':
       return {
-        key: `${side}.recognition`,
-        label: 'Recognition',
-        state: 'unavailable',
-        detail: outcome.reason,
+        ...base,
+        state: 'warning',
+        detail: `Not being evaluated. ${outcome.reason}`,
       };
+
     case 'result':
       return {
-        key: `${side}.recognition`,
-        label: 'Recognition',
+        ...base,
         state: 'healthy',
         detail: `“${outcome.candidate.label}” at ${Math.round(
           outcome.candidate.confidence * 100,
-        )}% measured confidence.`,
+        )}% measured confidence, from ${handWords(outcome.hands)}.`,
       };
+
     case 'uncertain':
       /*
-       * The recogniser is present but refused to commit. That is the model
-       * working as designed, so it is not a fault — but it is not a result
-       * either, and the wording must not let the two be confused.
+       * The recogniser ran and declined to commit. That is the model working as
+       * designed, so it is not a fault — but it is not a result either, and the
+       * wording must not let the two be confused.
        */
       return {
-        key: `${side}.recognition`,
-        label: 'Recognition',
+        ...base,
         state: 'warning',
-        detail: `A candidate scored ${Math.round(
+        detail: `A candidate from ${handWords(outcome.hands)} scored ${Math.round(
           outcome.candidate.confidence * 100,
         )}%, below the ${Math.round(
           RESULT_CONFIDENCE_THRESHOLD * 100,
         )}% threshold it must clear to be presented. No result is being shown, and the threshold itself is not a validated operating point.`,
       };
+
     case 'no-result':
       return {
-        key: `${side}.recognition`,
-        label: 'Recognition',
+        ...base,
         state: 'healthy',
         detail:
-          'A model is loaded and ran on the current frame without finding a sign. That is a normal outcome, not a failure.',
+          'A model is loaded and ran on the current input without matching a sign. That is a normal outcome, not a failure.',
       };
+
     case 'idle':
     default:
       return {
-        key: `${side}.recognition`,
-        label: 'Recognition',
+        ...base,
         state: 'unknown',
         detail:
-          'No sensor frame has been processed, so recognition has not run. This is not a statement about the model.',
+          'No sensor frame has been evaluated, so recognition has not run. This is not a statement about the model.',
       };
   }
+}
+
+function handWords(hands: readonly GloveSide[]): string {
+  if (hands.length === 2) return 'both hands';
+  if (hands.length === 0) return 'no hand';
+  return hands[0] === 'left' ? 'the left hand' : 'the right hand';
 }
 
 /* ---------------------------------------------------------------------- app */
@@ -359,6 +384,8 @@ export interface AppAuditInput {
   readonly preferences: AppPreferences;
   readonly translator: Translator;
   readonly speaker: Speaker;
+  /** The one shared recognition outcome, for the model's row. */
+  readonly recognition: RecognitionOutcome;
   /** Human name of the configured output language, for the speech row. */
   readonly targetLanguageName: string;
   /** True when the chosen output language has a TTS engine wired up. */
@@ -381,6 +408,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
           ? `${profile.name} is selected and has no vocabulary defined. No sign list exists yet, and defining one is a Deaf-led linguistic task rather than an implementation detail.`
           : `${profile.name} selected, ${profile.vocabularySize} signs.`,
     },
+    recognitionFinding(input.recognition),
     {
       key: 'app.translation',
       label: 'Translation',

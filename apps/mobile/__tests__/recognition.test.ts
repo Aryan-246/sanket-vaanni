@@ -12,6 +12,7 @@ import {
   UnimplementedRecogniser,
 } from '../src/recognition';
 import { SPEECH_UNAVAILABLE_REASON, UnavailableSpeaker } from '../src/speech';
+import type { RecognitionInput } from '../src/recognition';
 import type { SensorSample } from '../src/sensors/types';
 
 const sample: SensorSample = {
@@ -21,6 +22,14 @@ const sample: SensorSample = {
   accel: { x: 0, y: 0, z: 9.81 },
   gyro: { x: 0, y: 0, z: 0 },
 };
+
+/**
+ * One hand's reading, wrapped the way the recogniser now receives it.
+ *
+ * The wrapper is not decoration: it is what makes it impossible to hand a
+ * recogniser a bare sample and have it silently treated as a two-handed input.
+ */
+const input: RecognitionInput = { kind: 'single', side: 'right', sample };
 
 describe('UnimplementedRecogniser', () => {
   const profile = findProfile(DEFAULT_PROFILE_ID)!;
@@ -35,13 +44,13 @@ describe('UnimplementedRecogniser', () => {
     const recogniser = new UnimplementedRecogniser(profile);
     // Any number of frames, run repeatedly — it must never invent output.
     for (let i = 0; i < 50; i += 1) {
-      expect(recogniser.recognise(sample)).toBeNull();
+      expect(recogniser.recognise(input)).toBeNull();
     }
   });
 
   it('exposes no confidence value anywhere in its output', () => {
     const recogniser = new UnimplementedRecogniser(profile);
-    const result = recogniser.recognise(sample);
+    const result = recogniser.recognise(input);
     expect(result).toBeNull();
   });
 });
@@ -69,8 +78,26 @@ describe('sign language profiles', () => {
     // to avoid. Guard against it being reintroduced.
     SIGN_LANGUAGE_PROFILES.forEach((profile) => {
       expect(profile).not.toHaveProperty('sharedVocabulary');
-      expect(profile).not.toHaveProperty('vocabulary');
       expect(profile).not.toHaveProperty('gestures');
+      // Each profile owns a list of its own. The field exists — it has to, or
+      // nothing could declare which input a sign needs — but nothing about it
+      // is common to two languages.
+      expect(Array.isArray(profile.vocabulary)).toBe(true);
+    });
+
+    // Distinct arrays, so editing one profile's vocabulary cannot alter
+    // another's. A single shared list would make the test above pass while
+    // still coupling the languages together.
+    const lists = SIGN_LANGUAGE_PROFILES.map((profile) => profile.vocabulary);
+    expect(new Set(lists).size).toBe(lists.length);
+  });
+
+  it('never claims a larger vocabulary than it defines', () => {
+    // The two fields are different claims — signs *defined* versus signs a
+    // model can actually recognise — so they may legitimately differ. What can
+    // never happen is reporting more recognisable signs than exist.
+    SIGN_LANGUAGE_PROFILES.forEach((profile) => {
+      expect(profile.vocabularySize).toBeLessThanOrEqual(profile.vocabulary.length);
     });
   });
 

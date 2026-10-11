@@ -15,7 +15,7 @@
  * real model evaluated on held-out signers. See `docs/testing-strategy.md` for
  * what any reported accuracy figure must state.
  */
-import type { SensorSample } from '../sensors/types';
+import type { RecognitionInput } from './input';
 import type { SignLanguageProfile } from './profiles';
 
 export interface RecognitionCandidate {
@@ -44,7 +44,15 @@ export interface Recogniser {
   readonly isAvailable: boolean;
   /** Human-readable explanation when `isAvailable` is false. */
   readonly unavailableReason: string | null;
-  recognise(sample: SensorSample): RecognitionResult | null;
+  /**
+   * Evaluates one input.
+   *
+   * The argument is a `RecognitionInput`, not a bare sample, so a model is told
+   * explicitly whether it is looking at one hand or two. That is what makes a
+   * two-handed sign possible to express at all — and what makes it impossible
+   * for a single-hand stream to be silently stretched across both.
+   */
+  recognise(input: RecognitionInput): RecognitionResult | null;
 }
 
 const NOT_IMPLEMENTED =
@@ -67,10 +75,28 @@ export class UnimplementedRecogniser implements Recogniser {
     this.profileId = profile.id;
   }
 
-  recognise(_sample: SensorSample): RecognitionResult | null {
+  recognise(_input: RecognitionInput): RecognitionResult | null {
     return null;
   }
 }
 
 export { DEFAULT_PROFILE_ID, findProfile, SIGN_LANGUAGE_PROFILES } from './profiles';
 export type { SignLanguageProfile } from './profiles';
+export {
+  buildInput,
+  describeBlocker,
+  inputCapability,
+  parallelInputs,
+  planInput,
+  plannedSides,
+} from './input';
+export type {
+  HandRequirement,
+  InputAvailability,
+  InputBlocker,
+  InputCapability,
+  InputMode,
+  InputPlan,
+  RecognitionInput,
+  VocabularyEntry,
+} from './input';

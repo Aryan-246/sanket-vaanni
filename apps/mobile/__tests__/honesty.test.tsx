@@ -31,6 +31,8 @@ import {
   type TranslationOutcome,
 } from '../src/translation';
 import type { RecognitionOutcome } from '../src/recognition/outcome';
+import type { InputPlan } from '../src/recognition/input';
+import type { DataProvenance } from '../src/app/AppState';
 import { pressByLabel, renderApp, renderThemed, renderedText, teardown } from './support';
 
 /* ------------------------------------------------------------------ fixtures */
@@ -82,12 +84,33 @@ const ANY_PERCENTAGE = /\d\s*%/;
 /* ------------------------------------------------------- the recognition panel */
 
 describe('the recognition panel', () => {
+  /**
+   * A plan as the routing layer produces one for a single streaming hand.
+   *
+   * Written through the real type rather than a shortcut, because the panel's
+   * whole job is to describe this value honestly and a loose stand-in would let
+   * a regression through.
+   */
+  const RIGHT_PLAN: InputPlan = {
+    kind: 'ready',
+    mode: { kind: 'single', side: 'right' },
+    connectedSides: ['right'],
+    streamingSides: ['right'],
+  };
+
   async function panel(
     outcome: RecognitionOutcome,
-    snapshot: GloveSnapshot = glove(),
+    plan: InputPlan = RIGHT_PLAN,
+    provenance: DataProvenance = 'none',
   ): Promise<string> {
     const renderer = await renderThemed(
-      <RecognitionPanel side="right" outcome={outcome} profile={PROFILE} glove={snapshot} />,
+      <RecognitionPanel
+        outcome={outcome}
+        plan={plan}
+        profile={PROFILE}
+        provenance={provenance}
+        onExplain={() => undefined}
+      />,
     );
     const output = renderedText(renderer);
     await teardown(renderer);
@@ -100,29 +123,46 @@ describe('the recognition panel', () => {
       reason: 'No recognition model is available.',
     });
 
-    expect(output).toContain('Recognition unavailable');
+    expect(output).toContain('Recognition');
     expect(output).toContain('Not implemented');
-    expect(output).toContain('No recognition model is available.');
-    // Nothing here implies that holding a hand still would help.
+    // Nothing here implies that holding a hand still would help. The reason
+    // itself is one tap away in the explanation sheet rather than a paragraph
+    // competing with the result.
     expect(output).not.toContain('Waiting');
     expect(output).not.toContain('keep trying');
   });
 
-  it('distinguishes "no glove" from "no gesture"', async () => {
-    const disconnected = await panel({ kind: 'idle' });
-    const connected = await panel({ kind: 'idle' }, streamingGlove());
+  it('distinguishes "no glove" from "no frames yet" from "no gesture"', async () => {
+    // Three different situations, three different next steps — and only the
+    // first and second are the user's to fix.
+    const noGlove = await panel({
+      kind: 'blocked',
+      blocker: 'no-gloves',
+      reason: 'No glove is connected.',
+    });
+    const noFrames = await panel({
+      kind: 'blocked',
+      blocker: 'awaiting-frames',
+      reason: 'A glove is connected but has sent nothing.',
+    });
+    const noGesture = await panel({ kind: 'idle' });
 
-    expect(disconnected).toContain('Waiting for a gesture');
-    expect(disconnected).toContain('No glove is connected');
-    expect(connected).toContain('The glove is connected but no sensor frame');
+    expect(noGlove).toContain('No glove connected');
+    expect(noFrames).toContain('Waiting for sensor data');
+    expect(noGesture).toContain('Waiting for a gesture');
   });
 
   it('reports a confidence only when one was measured, and calls it measured', async () => {
-    const measured = await panel({
-      kind: 'result',
-      profileId: 'isl',
-      candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.94 },
-    });
+    const measured = await panel(
+      {
+        kind: 'result',
+        profileId: 'isl',
+        candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.94 },
+        hands: ['right'],
+      },
+      RIGHT_PLAN,
+      'simulated',
+    );
 
     expect(measured).toContain('नमस्ते');
     expect(measured).toContain('Recognised');
@@ -134,6 +174,7 @@ describe('the recognition panel', () => {
     for (const outcome of [
       { kind: 'unavailable', reason: 'No model.' },
       { kind: 'idle' },
+      { kind: 'blocked', blocker: 'no-gloves', reason: 'Nothing is connected.' },
     ] as RecognitionOutcome[]) {
       const output = await panel(outcome);
 
@@ -143,22 +184,37 @@ describe('the recognition panel', () => {
     }
   });
 
-  it('presents a weak match as a guess, and says the threshold has no basis', async () => {
+  it('presents a weak match as uncertain rather than as a result', async () => {
     // An uncertain match is shown, because hiding it would be its own kind of
-    // lie — but it is shown under a warning that names what it is.
-    const output = await panel(
-      {
-        kind: 'uncertain',
-        profileId: 'isl',
-        candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.42 },
-      },
-      streamingGlove(),
-    );
+    // lie — but it is never presented with the word `Recognised`.
+    const output = await panel({
+      kind: 'uncertain',
+      profileId: 'isl',
+      candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.42 },
+      hands: ['right'],
+    });
 
-    expect(output).toContain('Uncertain');
+    expect(output).toContain('Low confidence');
     expect(output).toContain('42% measured');
-    expect(output).toContain('no empirical basis');
-    expect(output).toContain('guess rather than as a result');
+    expect(output).not.toContain('Recognised');
+  });
+
+  it('says which hand produced the result, so no selector is needed', async () => {
+    const oneHand = await panel({
+      kind: 'result',
+      profileId: 'isl',
+      candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.9 },
+      hands: ['right'],
+    });
+    const bothHands = await panel({
+      kind: 'result',
+      profileId: 'isl',
+      candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.9 },
+      hands: ['left', 'right'],
+    });
+
+    expect(oneHand).toContain('Right hand');
+    expect(bothHands).toContain('Both hands');
   });
 
   it('marks a simulated reading as Demo Mode and carries no accuracy claim', async () => {
@@ -167,14 +223,29 @@ describe('the recognition panel', () => {
         kind: 'result',
         profileId: 'isl',
         candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.94 },
+        hands: ['right'],
       },
-      streamingGlove(),
+      RIGHT_PLAN,
+      'simulated',
     );
 
     expect(output).toContain('Demo Mode');
     for (const claim of ['accurate', 'accuracy', 'correct', 'proven']) {
       expect(output.toLowerCase()).not.toContain(claim);
     }
+  });
+
+  it('never labels a half-real pair as either Live or Demo', async () => {
+    // One hardware glove beside one simulator is a configuration the app
+    // permits. Calling it either would misdescribe half of it.
+    const output = await panel({ kind: 'idle' }, RIGHT_PLAN, 'mixed');
+
+    expect(output).toContain('Mixed data');
+    expect(output).not.toContain('Demo Mode');
+    // Exactly one `Live`, and it is the panel's own "Live translation" heading.
+    // A Live provenance badge would make it two.
+    expect(output.match(/Live/g) ?? []).toHaveLength(1);
+    expect(output).toContain('Live translation');
   });
 
   it('names the language profile the result was matched against', async () => {
@@ -184,6 +255,22 @@ describe('the recognition panel', () => {
 
     expect(output).toContain(PROFILE.name);
     expect(output).toContain(`${PROFILE.vocabularySize} signs`);
+  });
+
+  it('says how the recogniser is being fed', async () => {
+    const single = await panel({ kind: 'idle' });
+    const bimanual = await panel(
+      { kind: 'idle' },
+      {
+        kind: 'ready',
+        mode: { kind: 'bimanual' },
+        connectedSides: ['left', 'right'],
+        streamingSides: ['left', 'right'],
+      },
+    );
+
+    expect(single).toContain('right hand');
+    expect(bimanual).toContain('both hands');
   });
 });
 
@@ -356,6 +443,7 @@ describe('the translator panel', () => {
           kind: 'result',
           profileId: 'isl',
           candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.94 },
+          hands: ['right'],
         },
         'hi',
       ),
@@ -383,6 +471,7 @@ describe('the translator panel', () => {
           kind: 'result',
           profileId: 'isl',
           candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.94 },
+          hands: ['right'],
         },
         'hi',
       ),
@@ -405,7 +494,6 @@ describe('the Dashboard as a whole', () => {
     // is `unavailable` rather than `idle`, because no model exists at all —
     // which is the honest answer and not the same as "waiting".
     expect(output).toContain('No glove connected');
-    expect(output).toContain('Recognition unavailable');
     expect(output).toContain('Not implemented');
     expect(output).toContain('Not available');
     expect(output).not.toMatch(ANY_PERCENTAGE);
@@ -415,25 +503,38 @@ describe('the Dashboard as a whole', () => {
     await teardown(renderer);
   });
 
-  it('says wrist yaw cannot be measured rather than showing a number', async () => {
-    // The part has no magnetometer: this is a property of the hardware, not a
-    // missing feature.
+  it('shows both hands and offers no hand selector', async () => {
+    // The defect the brief names specifically. Recognition is routed by the
+    // vocabulary, so which hand the screen is "about" is not a user choice, and
+    // the caption that used to ask for one is gone.
     const { renderer } = await renderApp({ skipIntro: true });
     const output = renderedText(renderer);
 
-    expect(output).toContain('Yaw');
-    expect(output).toContain('Not measurable');
-    expect(output).toContain('no magnetometer');
+    expect(output).toContain('Left');
+    expect(output).toContain('Right');
+    expect(output).not.toContain('Viewing');
 
     await teardown(renderer);
   });
 
-  it('says the hand is a preview rather than the 3D viewer', async () => {
+  it('shows no wrist angle when no glove is sending data', async () => {
+    // A pitch of 0° for a disconnected glove would be a measurement nobody
+    // took. The absence is stated instead.
     const { renderer } = await renderApp({ skipIntro: true });
     const output = renderedText(renderer);
 
-    expect(output).toContain('Articulated preview');
-    expect(output).toContain('Why this is not the 3D viewer');
+    expect(output).toContain('No wrist orientation');
+    expect(output).not.toContain('°');
+    expect(output).not.toContain('Not measurable');
+
+    await teardown(renderer);
+  });
+
+  it('says the hand figure is driven by flex measurements, not by a 3D model', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    const output = renderedText(renderer);
+
+    expect(output).toContain('Driven by measured flex, not a 3D model');
 
     await teardown(renderer);
   });
@@ -442,19 +543,38 @@ describe('the Dashboard as a whole', () => {
     jest.useFakeTimers();
     const { renderer } = await renderApp({ skipIntro: true });
 
-    await pressByLabel(renderer, 'Find right gloves');
+    await pressByLabel(renderer, 'Find the right glove');
     await advanceBy(700);
-    await pressByLabel(renderer, 'Connect to Demo glove (simulated)');
+    await pressByLabel(renderer, 'Connect Demo glove (simulated) as the right glove');
     await advanceBy(700);
 
     const output = renderedText(renderer);
 
     expect(output).toContain('Demo Mode');
-    expect(output).toContain('Simulated');
     expect(output).toContain('simulated');
     expect(output).not.toContain('Hardware');
     // The sentinel is an implementation detail and must never be on screen.
     expect(output).not.toContain(MOCK_DEVICE_NAME);
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('says yaw cannot be measured once a hand is actually reporting', async () => {
+    // A property of the hardware, not a missing feature: the IMU has no
+    // magnetometer, so rotation about the vertical axis is unobservable. It is
+    // stated on the live row rather than as a row of its own per hand.
+    jest.useFakeTimers();
+    const { renderer } = await renderApp({ skipIntro: true });
+
+    await pressByLabel(renderer, 'Find the right glove');
+    await advanceBy(700);
+    await pressByLabel(renderer, 'Connect Demo glove (simulated) as the right glove');
+    await advanceBy(700);
+
+    const output = renderedText(renderer);
+
+    expect(output).toContain('yaw not measurable');
 
     await teardown(renderer);
     jest.useRealTimers();

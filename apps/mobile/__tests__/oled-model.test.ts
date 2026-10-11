@@ -661,15 +661,40 @@ describe('oledValuesFrom', () => {
       kind: 'uncertain',
       profileId: 'isl',
       candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.42 },
+      hands: ['right'],
     });
     const result = oledValuesFrom(glove(), {
       kind: 'result',
       profileId: 'isl',
       candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.93 },
+      hands: ['right'],
     });
 
     expect(uncertain.recognisedText).toBeNull();
     expect(result.recognisedText).toBe('नमस्ते');
+  });
+
+  it('does not put another hand’s sign on this glove’s panel', () => {
+    // Recognition is no longer per-glove: there is one shared outcome. Without
+    // the side check a left-hand sign would be drawn on the right glove's
+    // display as well, which would be the panel claiming a measurement its own
+    // hand never produced.
+    const leftOnly = oledValuesFrom(glove(), {
+      kind: 'result',
+      profileId: 'isl',
+      candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.93 },
+      hands: ['left'],
+    });
+    const both = oledValuesFrom(glove(), {
+      kind: 'result',
+      profileId: 'isl',
+      candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.93 },
+      hands: ['left', 'right'],
+    });
+
+    expect(leftOnly.recognisedText).toBeNull();
+    // A two-handed sign belongs to both panels, so this one does show it.
+    expect(both.recognisedText).toBe('नमस्ते');
   });
 
   it('carries the demo warning onto the panel', () => {

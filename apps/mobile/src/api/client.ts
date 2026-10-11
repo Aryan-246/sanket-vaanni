@@ -52,7 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
     return fail(
       'not-configured',
       'No backend URL is configured. Set API_BASE_URL in apps/mobile/.env ' +
-        '(see .env.example). The app works offline without it.',
+      '(see .env.example). The app works offline without it.',
     );
   }
 
@@ -82,7 +82,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
     return fail(
       'network',
       `Could not reach the backend at ${base}. It may not be running, or a ` +
-        'physical device may need the host LAN address rather than localhost.',
+      'physical device may need the host LAN address rather than localhost.',
     );
   } finally {
     clearTimeout(timeout);

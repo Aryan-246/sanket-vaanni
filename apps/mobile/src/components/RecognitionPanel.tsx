@@ -4,116 +4,111 @@ import { StyleSheet, View } from 'react-native';
 import { AppText } from './AppText';
 import { Badge } from './Badge';
 import { Card } from './Card';
-import { Icon } from './Icon';
-import { isSimulatedLink } from '../ble/link';
-import type { GloveSnapshot } from '../ble/controller';
+import { IconButton } from './IconButton';
+import { outcomeConfidence, outcomeHandWords, outcomeText } from '../recognition/outcome';
 import type { RecognitionOutcome } from '../recognition/outcome';
-import { OUTCOME_HEADLINE, outcomeConfidence, outcomeText } from '../recognition/outcome';
+import type { InputPlan } from '../recognition/input';
 import type { SignLanguageProfile } from '../recognition/profiles';
-import { formatPercent, sideWord } from '../app/format';
+import { formatPercent } from '../app/format';
+import type { DataProvenance } from '../app/AppState';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
-import { letterSpacing, radii, spacing } from '../theme';
+import { letterSpacing, spacing } from '../theme';
 
 export interface RecognitionPanelProps {
-  side: 'left' | 'right';
   outcome: RecognitionOutcome;
+  plan: InputPlan;
   profile: SignLanguageProfile;
-  glove: GloveSnapshot;
+  provenance: DataProvenance;
+  /** Opens the explanation sheet. The panel states; it does not lecture. */
+  onExplain: () => void;
   testID?: string;
 }
 
 /**
- * The recognition result.
+ * The one place a result appears.
  *
- * ## The design decision this component is built on
+ * ## Why there is a single panel and not one per hand
  *
- * "Nothing recognised" is five different situations, and the panel shows five
- * different things, because the honest answer to "why is there no sign?" is
- * different in each:
+ * A result is a property of the conversation, not of a glove. Two panels meant
+ * a user could read the left hand's guess beside the right hand's and have no
+ * way to tell which one the app would actually speak — and it made a two-handed
+ * sign impossible to display at all, because it belongs to neither panel.
  *
- *  - **unavailable** — the model does not exist. A capability gap, saying so
- *    plainly is the only useful answer.
- *  - **idle** — no reading has been evaluated. The user needs to know that the
- *    missing piece is a *glove*, not a gesture.
- *  - **no-result** — a reading was evaluated and nothing matched. Only reachable
- *    once a model exists, and it means something different again.
- *  - **uncertain** — something matched, weakly. The label is shown *as* a
- *    weaker match, not as a result.
- *  - **result** — a match above the presentation threshold.
+ * So there is one panel, and when a candidate exists it names the hand that
+ * produced it (`Left hand`, `Both hands`) rather than relying on the user having
+ * selected one.
  *
- * Collapsing these into one "Waiting…" is the single most common way this kind
- * of app misleads people, so the panel never does it.
+ * ## Short lines here, the full explanation behind the button
  *
- * ## Confidence
- *
- * Rendered only when the recogniser produced a number, and rendered as
- * *measured* when it does — with the percentage and a note that it is the
- * model's own output. When there is none, the row says so explicitly rather than
- * disappearing, so "no confidence available" and "confidence not shown" cannot
- * be confused.
+ * The panel says what happened in a few words. The paragraphs — why a blocked
+ * state is blocked, what a confidence means, what the vocabulary gap is — live
+ * in the sheet the ⓘ button opens. That split is deliberate: the reason a user
+ * looks at this panel mid-conversation is to read the result, and a wall of
+ * technical prose pushes the result off the screen.
  */
 export function RecognitionPanel({
-  side,
   outcome,
+  plan,
   profile,
-  glove,
+  provenance,
+  onExplain,
   testID,
 }: RecognitionPanelProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
 
   const confidence = outcomeConfidence(outcome);
-  const simulated = isSimulatedLink(glove.link);
+  const hands = outcomeHandWords(outcome);
+  const candidate = outcomeText(outcome);
 
   return (
-    <Card testID={testID} style={styles.card} accentBorder={confidence !== null}>
+    <Card
+      testID={testID}
+      style={styles.card}
+      accentBorder={outcome.kind === 'result'}
+    >
       <View style={styles.headerRow}>
         <AppText variant="overline" overline color={palette.textMuted}>
-          Recognised sign · {sideWord(side)}
+          Live translation
         </AppText>
 
-        <View style={styles.badges}>
-          {simulated && <Badge label="Demo Mode" tone="demo" dot />}
-          {glove.source === 'none' && <Badge label="No sensor input" tone="neutral" />}
+        <View style={styles.headerRight}>
+          <ProvenanceBadge provenance={provenance} />
+          <IconButton
+            icon="info"
+            onPress={onExplain}
+            accessibilityLabel="What this panel is showing"
+          />
         </View>
       </View>
 
       <View style={styles.stage}>
         <AppText variant="caption" color={palette.textMuted}>
-          {OUTCOME_HEADLINE[outcome.kind]}
+          {OUTCOME_HEADLINE_SHORT[outcome.kind]}
         </AppText>
 
-        {outcome.kind === 'result' || outcome.kind === 'uncertain' ? (
-          <AppText
-            variant="result"
-            color={outcome.kind === 'result' ? palette.textPrimary : palette.warning}
-            style={styles.headline}
-            numberOfLines={3}
-          >
-            {outcomeText(outcome) ?? '—'}
-          </AppText>
-        ) : (
-          <AppText variant="title" color={palette.textSecondary} style={styles.headline}>
-            {placeholderFor(outcome)}
+        <AppText
+          variant="result"
+          color={headlineColor(outcome, palette)}
+          style={styles.headline}
+          numberOfLines={3}
+        >
+          {candidate ?? shortState(outcome)}
+        </AppText>
+
+        {hands !== null && (
+          <AppText variant="label" color={palette.textSecondary}>
+            {hands}
           </AppText>
         )}
-
-        <AppText variant="body" color={palette.textSecondary} style={styles.explanation}>
-          {explanationFor(outcome, glove)}
-        </AppText>
       </View>
 
-      {outcome.kind === 'uncertain' && (
-        <View style={[styles.notice, { backgroundColor: palette.warningSurface }]}>
-          <Icon name="warning" size={14} color={palette.warning} />
-          <AppText variant="caption" color={palette.warning} style={styles.noticeText}>
-            Below the presentation threshold, so it is shown as a guess rather than as a
-            result. The threshold itself has no empirical basis yet.
-          </AppText>
-        </View>
-      )}
-
+      {/*
+        Confidence is rendered even when there is none. Hiding the row would make
+        "no model has reported a confidence" indistinguishable from "the panel
+        forgot to show one", and the first is a fact worth stating.
+      */}
       <View style={styles.confidenceRow}>
         <AppText variant="caption" color={palette.textMuted}>
           Model confidence
@@ -127,51 +122,104 @@ export function RecognitionPanel({
       </View>
 
       <View style={styles.footer}>
-        <AppText variant="caption" color={palette.textMuted} style={styles.footerText}>
-          {profile.name}
-          {profile.nativeName !== null ? ` · ${profile.nativeName}` : ''} ·{' '}
-          {profile.vocabularySize} signs
+        <AppText variant="caption" color={palette.textMuted} numberOfLines={2}>
+          {profile.name} · {profile.vocabularySize} signs · {inputSummary(plan)}
         </AppText>
       </View>
     </Card>
   );
 }
 
-/** The large text when there is no candidate to show. */
-function placeholderFor(outcome: RecognitionOutcome): string {
+/**
+ * One-line state labels.
+ *
+ * Shorter than `OUTCOME_HEADLINE` on purpose: that map is used where the state
+ * is the whole message, this one sits above a large line and only needs to set
+ * it up.
+ */
+const OUTCOME_HEADLINE_SHORT: Record<RecognitionOutcome['kind'], string> = {
+  unavailable: 'Recognition',
+  blocked: 'Cannot start',
+  idle: 'Waiting',
+  'no-result': 'No match',
+  uncertain: 'Low confidence',
+  result: 'Recognised',
+};
+
+/**
+ * The large line when there is no candidate.
+ *
+ * Every branch is a fact about this build. None of them suggests that holding a
+ * hand still for longer would help, because in the blocked states it would not.
+ */
+function shortState(outcome: RecognitionOutcome): string {
   switch (outcome.kind) {
+    case 'unavailable':
+      return 'Not implemented';
+    case 'blocked':
+      return BLOCKER_SHORT[outcome.blocker];
     case 'idle':
       return 'Waiting for a gesture';
     case 'no-result':
       return 'No match';
-    case 'unavailable':
-      return 'Not implemented';
-    default:
+    case 'uncertain':
+    case 'result':
       return '—';
   }
 }
 
-/**
- * The sentence under the headline.
- *
- * Every branch states a fact about this build. None of them implies that holding
- * a hand still for longer would help, because in the `unavailable` case it would
- * not.
- */
-function explanationFor(outcome: RecognitionOutcome, glove: GloveSnapshot): string {
+const BLOCKER_SHORT: Record<
+  Extract<RecognitionOutcome, { kind: 'blocked' }>['blocker'],
+  string
+> = {
+  'no-vocabulary': 'No vocabulary yet',
+  'no-gloves': 'No glove connected',
+  'awaiting-frames': 'Waiting for sensor data',
+  'needs-both-hands': 'Both hands needed',
+  'unsupported-sides': 'Hand not in vocabulary',
+};
+
+function headlineColor(outcome: RecognitionOutcome, palette: Palette): string {
   switch (outcome.kind) {
-    case 'unavailable':
-      return outcome.reason;
-    case 'idle':
-      return glove.link.kind === 'connected'
-        ? 'The glove is connected but no sensor frame has been evaluated yet.'
-        : 'No glove is connected, so there is nothing to evaluate. Recognition never runs on a reading it does not have.';
-    case 'no-result':
-      return 'A reading was evaluated and matched nothing in this profile’s vocabulary.';
-    case 'uncertain':
-      return 'A candidate matched, but not confidently enough to present as a result.';
     case 'result':
-      return '';
+      return palette.textPrimary;
+    case 'uncertain':
+      return palette.warning;
+    default:
+      return palette.textSecondary;
+  }
+}
+
+/** How the recogniser is being fed, in three words. */
+function inputSummary(plan: InputPlan): string {
+  if (plan.kind === 'blocked') return 'no input';
+  switch (plan.mode.kind) {
+    case 'single':
+      return `${plan.mode.side} hand`;
+    case 'bimanual':
+      return 'both hands';
+    case 'parallel-single':
+      return `${plan.mode.sides.length} hands, separate`;
+  }
+}
+
+/**
+ * What the numbers on this panel came from.
+ *
+ * `mixed` is not a technicality — one real glove beside one simulator produces
+ * two readings of different trustworthiness on the same screen, and a badge that
+ * called that either `Live` or `Demo Mode` would misdescribe half of it.
+ */
+function ProvenanceBadge({ provenance }: { provenance: DataProvenance }): React.JSX.Element {
+  switch (provenance) {
+    case 'real':
+      return <Badge label="Live" tone="success" dot />;
+    case 'simulated':
+      return <Badge label="Demo Mode" tone="demo" dot />;
+    case 'mixed':
+      return <Badge label="Mixed data" tone="warning" dot />;
+    default:
+      return <Badge label="No data" tone="neutral" />;
   }
 }
 
@@ -186,32 +234,20 @@ const makeStyles = (palette: Palette) =>
       justifyContent: 'space-between',
       gap: spacing.sm,
     },
-    badges: {
+    headerRight: {
       flexDirection: 'row',
+      alignItems: 'center',
       gap: spacing.xs,
       flexShrink: 0,
     },
     stage: {
       gap: spacing.xs,
       paddingVertical: spacing.sm,
-      minHeight: 104,
+      minHeight: 96,
       justifyContent: 'center',
     },
     headline: {
       letterSpacing: letterSpacing.display,
-    },
-    explanation: {
-      marginTop: spacing.xs,
-    },
-    notice: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: spacing.sm,
-      padding: spacing.md,
-      borderRadius: radii.sm,
-    },
-    noticeText: {
-      flex: 1,
     },
     confidenceRow: {
       flexDirection: 'row',
@@ -223,11 +259,6 @@ const makeStyles = (palette: Palette) =>
       borderTopColor: palette.border,
     },
     footer: {
-      gap: 2,
-    },
-    footerText: {
-      // Sits under the confidence rule without a second divider competing with
-      // it — the panel should read as one block, not three.
       marginTop: -spacing.xs,
     },
   });

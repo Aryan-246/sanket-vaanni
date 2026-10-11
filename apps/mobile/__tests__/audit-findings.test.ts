@@ -78,8 +78,30 @@ function audit(
   return gloveFindings({
     snapshot: snapshot(),
     calibration: createDemoCalibration('right'),
-    outcome: { kind: 'idle' },
     nowMs: NOW,
+    ...overrides,
+  });
+}
+
+/**
+ * The app-level rows, with recognition supplied per test.
+ *
+ * Recognition became an app-level row when it stopped being per-glove: there is
+ * one shared outcome now, computed from whichever hands the vocabulary requires,
+ * so a per-glove copy would either duplicate the sentence or attribute a
+ * two-handed sign to one hand.
+ */
+function appAudit(
+  overrides: Partial<Parameters<typeof appFindings>[0]> = {},
+): Finding[] {
+  return appFindings({
+    profile: findProfile('isl')!,
+    preferences: DEFAULT_PREFERENCES,
+    translator: new UnimplementedTranslator(),
+    speaker: new UnavailableSpeaker(),
+    recognition: { kind: 'idle' },
+    targetLanguageName: 'English',
+    targetLanguageSpeechWired: false,
     ...overrides,
   });
 }
@@ -307,7 +329,6 @@ describe('gloveFindings', () => {
     const left = gloveFindings({
       snapshot: snapshot({ side: 'left' }),
       calibration: createDemoCalibration('left'),
-      outcome: { kind: 'idle' },
       nowMs: NOW,
     });
 
@@ -336,51 +357,87 @@ describe('the recognition row', () => {
     },
     { outcome: { kind: 'idle' }, state: 'unknown', expect: 'has not run' },
     { outcome: { kind: 'no-result' }, state: 'healthy', expect: 'normal outcome' },
+    {
+      outcome: { kind: 'blocked', blocker: 'no-gloves', reason: 'Nothing is connected.' },
+      state: 'warning',
+      expect: 'Nothing is connected.',
+    },
   ];
 
   it.each(cases)('reports $state for $outcome.kind', ({ outcome, state, expect: wording }) => {
-    const finding = byKey(audit({ outcome }), 'right.recognition');
+    const finding = byKey(appAudit({ recognition: outcome }), 'app.recognition');
 
     expect(finding.state).toBe(state);
     expect(finding.detail).toContain(wording);
   });
 
+  it('names the blocked state as something to act on, not as a model problem', () => {
+    const blocked = byKey(
+      appAudit({
+        recognition: { kind: 'blocked', blocker: 'no-vocabulary', reason: 'No signs defined.' },
+      }),
+      'app.recognition',
+    );
+
+    expect(blocked.state).not.toBe('unavailable');
+    expect(blocked.detail).toContain('Not being evaluated');
+  });
+
   it('distinguishes "ran and found nothing" from "never ran"', () => {
     // Both mean no sign on screen. Only one of them is a statement about the
     // model, and the wording has to keep them apart.
-    const idle = byKey(audit({ outcome: { kind: 'idle' } }), 'right.recognition');
-    const none = byKey(audit({ outcome: { kind: 'no-result' } }), 'right.recognition');
+    const idle = byKey(appAudit({ recognition: { kind: 'idle' } }), 'app.recognition');
+    const none = byKey(appAudit({ recognition: { kind: 'no-result' } }), 'app.recognition');
 
     expect(idle.state).not.toBe(none.state);
     expect(idle.detail).toContain('not a statement about the model');
   });
 
-  it('shows a measured confidence on a result, and calls it measured', () => {
+  it('shows a measured confidence on a result, and names the hand it came from', () => {
     const finding = byKey(
-      audit({
-        outcome: {
+      appAudit({
+        recognition: {
           kind: 'result',
           profileId: 'isl',
           candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.93 },
+          hands: ['right'],
         },
       }),
-      'right.recognition',
+      'app.recognition',
     );
 
     expect(finding.state).toBe('healthy');
     expect(finding.detail).toContain('93% measured');
+    expect(finding.detail).toContain('the right hand');
+  });
+
+  it('attributes a two-handed result to both hands', () => {
+    const finding = byKey(
+      appAudit({
+        recognition: {
+          kind: 'result',
+          profileId: 'isl',
+          candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.93 },
+          hands: ['left', 'right'],
+        },
+      }),
+      'app.recognition',
+    );
+
+    expect(finding.detail).toContain('both hands');
   });
 
   it('calls an uncertain match a warning and quotes the threshold honestly', () => {
     const finding = byKey(
-      audit({
-        outcome: {
+      appAudit({
+        recognition: {
           kind: 'uncertain',
           profileId: 'isl',
           candidate: { signId: 'namaste', label: 'नमस्ते', confidence: 0.42 },
+          hands: ['right'],
         },
       }),
-      'right.recognition',
+      'app.recognition',
     );
 
     expect(finding.state).toBe('warning');
@@ -393,14 +450,7 @@ describe('the recognition row', () => {
 /* -------------------------------------------------------------- the app rows */
 
 describe('appFindings', () => {
-  const app = appFindings({
-    profile: findProfile('isl')!,
-    preferences: DEFAULT_PREFERENCES,
-    translator: new UnimplementedTranslator(),
-    speaker: new UnavailableSpeaker(),
-    targetLanguageName: 'English',
-    targetLanguageSpeechWired: false,
-  });
+  const app = appAudit();
 
   it('does not call an empty vocabulary healthy', () => {
     // A profile with no signs cannot recognise anything, however correctly it

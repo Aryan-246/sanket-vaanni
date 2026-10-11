@@ -17,6 +17,8 @@
  * repository before that work is done should be treated as fiction.
  */
 
+import type { VocabularyEntry } from './input';
+
 export type ProfileStatus = 'planned' | 'in-progress' | 'available';
 
 export interface SignLanguageProfile {
@@ -36,8 +38,24 @@ export interface SignLanguageProfile {
    * Number of signs the profile can currently recognise. Zero everywhere —
    * deliberately. This number must only ever come from a real, evaluated
    * vocabulary.
+   *
+   * Kept as its own field rather than read from `vocabulary.length` because the
+   * two are not the same claim: a profile may have signs *defined* that no model
+   * has been trained on, and only the trained ones are recognisable. A test
+   * asserts `vocabularySize <= vocabulary.length` so the pair cannot drift into
+   * contradiction.
    */
   readonly vocabularySize: number;
+  /**
+   * The signs this profile defines, with the input each one requires.
+   *
+   * Empty for every profile today, which is why nothing is recognisable and why
+   * `planInput` never returns `ready`. It is here now so that the moment a
+   * Deaf-led vocabulary exists, the input routing is already typed and has a
+   * place to be declared — rather than being retrofitted onto a pipeline that
+   * assumed one hand.
+   */
+  readonly vocabulary: readonly VocabularyEntry[];
 }
 
 /**
@@ -53,6 +71,7 @@ export const SIGN_LANGUAGE_PROFILES: readonly SignLanguageProfile[] = [
     languageCode: null,
     status: 'planned',
     vocabularySize: 0,
+    vocabulary: [],
   },
   {
     id: 'asl',
@@ -61,6 +80,7 @@ export const SIGN_LANGUAGE_PROFILES: readonly SignLanguageProfile[] = [
     languageCode: 'ase',
     status: 'planned',
     vocabularySize: 0,
+    vocabulary: [],
   },
   {
     id: 'bsl',
@@ -69,6 +89,7 @@ export const SIGN_LANGUAGE_PROFILES: readonly SignLanguageProfile[] = [
     languageCode: 'bfi',
     status: 'planned',
     vocabularySize: 0,
+    vocabulary: [],
   },
 ];
 

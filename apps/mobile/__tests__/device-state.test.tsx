@@ -387,15 +387,17 @@ describe('demo data is labelled everywhere it surfaces', () => {
     // Nothing is connected yet, and the screen says so.
     expect(renderedText(renderer)).toContain('No glove connected');
 
-    await pressByLabel(renderer, 'Find right gloves');
+    await pressByLabel(renderer, 'Find the right glove');
     await advanceBy(700);
 
     expect(renderedText(renderer)).toContain('Demo glove (simulated)');
 
-    await pressByLabel(renderer, 'Connect to Demo glove (simulated)');
+    await pressByLabel(renderer, 'Connect Demo glove (simulated) as the right glove');
 
     // Mid-flight the UI reports connecting — it does not jump to connected.
-    expect(renderedText(renderer)).toContain('Connecting to Demo glove (simulated)');
+    // The cell says one short word, so it does not have to repeat the device
+    // name it is already showing two lines above.
+    expect(renderedText(renderer)).toContain('Connecting…');
 
     await advanceBy(400);
     await advanceBy(300);
@@ -404,7 +406,7 @@ describe('demo data is labelled everywhere it surfaces', () => {
 
     expect(right.getStatus().kind).toBe('connected');
     expect(output).toContain('Demo Mode');
-    expect(output).toContain('Simulated');
+    expect(output).toContain('simulated');
     // The sentinel is an implementation detail and must never be on screen.
     expect(output).not.toContain(MOCK_DEVICE_NAME);
     // And nothing anywhere claims the data came from hardware.

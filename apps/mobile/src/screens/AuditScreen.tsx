@@ -10,7 +10,7 @@ import { Screen } from '../components/Screen';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { SectionHeader } from '../components/SectionHeader';
 import { StateChip } from '../components/StateChip';
-import { useAppState, useGlove, useRecognition } from '../app/AppState';
+import { useAppState, useGlove, useLiveTranslation } from '../app/AppState';
 import { findOutputLanguage } from '../app/preferences';
 import {
   appFindings,
@@ -64,8 +64,9 @@ export function AuditScreen(): React.JSX.Element {
 
   const left = useGlove('left');
   const right = useGlove('right');
-  const leftOutcome = useRecognition('left');
-  const rightOutcome = useRecognition('right');
+  // One outcome for the conversation, not one per glove — matching the
+  // Dashboard, which shows exactly this value.
+  const { outcome } = useLiveTranslation();
 
   /**
    * When the readings on screen were last looked at.
@@ -83,10 +84,9 @@ export function AuditScreen(): React.JSX.Element {
       gloveFindings({
         snapshot: side === 'left' ? left : right,
         calibration: calibration[side],
-        outcome: side === 'left' ? leftOutcome : rightOutcome,
         nowMs: measuredAtMs,
       }),
-    [calibration, left, leftOutcome, measuredAtMs, right, rightOutcome],
+    [calibration, left, measuredAtMs, right],
   );
 
   const findingsBySide = useMemo(
@@ -102,11 +102,12 @@ export function AuditScreen(): React.JSX.Element {
         preferences,
         translator,
         speaker,
+        recognition: outcome,
         targetLanguageName:
           targetLanguage?.name ?? preferences.targetLanguageCode.toUpperCase(),
         targetLanguageSpeechWired: targetLanguage?.speechWired ?? false,
       }),
-    [preferences, profile, speaker, targetLanguage, translator],
+    [outcome, preferences, profile, speaker, targetLanguage, translator],
   );
 
   const everything = useMemo(

@@ -53,10 +53,20 @@ export function oledValuesFrom(
   }
 
   return {
-    // Only a presented result reaches the panel. An uncertain candidate is not
-    // text the user has been shown, so putting it on the display would be
-    // presenting a guess as a result.
-    recognisedText: outcome.kind === 'result' ? outcome.candidate.label : null,
+    /*
+     * Only a presented result reaches the panel, and only on the hand that
+     * produced it. An uncertain candidate is not text the user has been shown, so
+     * putting it on the display would present a guess as a result.
+     *
+     * The side check matters now that recognition is no longer per-glove: the
+     * outcome is shared, so without it a left-hand sign would be drawn on the
+     * right glove's panel as well. A two-handed sign has both sides listed and so
+     * reaches both panels, which is correct.
+     */
+    recognisedText:
+      outcome.kind === 'result' && outcome.hands.includes(glove.side)
+        ? outcome.candidate.label
+        : null,
     statusText,
     batteryText: null,
   };

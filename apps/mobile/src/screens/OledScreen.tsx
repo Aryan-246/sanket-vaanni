@@ -17,7 +17,7 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { Sheet } from '../components/Sheet';
 import { TextField } from '../components/TextField';
 import { Toggle } from '../components/Toggle';
-import { useAppState, useGlove, useRecognition } from '../app/AppState';
+import { useAppState, useGlove, useLiveTranslation } from '../app/AppState';
 import { formatDuration } from '../app/format';
 import {
   ANIMATION_SPEEDS,
@@ -131,7 +131,10 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
   const [confirmReset, setConfirmReset] = useState(false);
 
   const glove = useGlove(side);
-  const outcome = useRecognition(side);
+  // The shared outcome — there is no per-glove recogniser any more. `oledValuesFrom`
+  // drops a result that this hand did not produce, so the panel still only ever
+  // shows its own glove's sign.
+  const { outcome } = useLiveTranslation();
 
   const values: OledValues = useMemo(() => oledValuesFrom(glove, outcome), [glove, outcome]);
 

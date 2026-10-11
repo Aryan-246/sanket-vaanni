@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 import { ActionButton } from '../components/ActionButton';
 import { AppText } from '../components/AppText';
@@ -37,27 +37,50 @@ export interface MoreScreenProps {
   onReplayIntro: () => void;
   /** Switches to the OLED tab, where the layout is edited. */
   onOpenOled?: () => void;
+  /** Switches to the Audit tab, which is where component status lives. */
+  onOpenAudit?: () => void;
 }
 
 /**
- * More — preferences, appearance, and an honest account of what is not built.
+ * More — the settings that are not about a connected glove.
  *
- * ## Why the deferred features are listed rather than hidden
+ * ## What belongs here, and what does not
  *
- * The brief defers accounts, cloud sync, the BLE transport, the recognition
- * model and the OLED command set. Omitting them would leave a screen that looks
- * finished, which is the more misleading option: a user would reasonably
- * conclude the app is broken somewhere they cannot see. So the last card names
- * each one and says plainly that it does not exist.
+ * The dividing line is frequency and ownership. Anything a user changes while
+ * watching a sign belongs on the Dashboard or in the OLED Studio; anything they
+ * set once and forget belongs here. That is why the sign-language and output
+ * language choices are here behind rows, while the voice toggle — which is
+ * reached for mid-conversation — is also on the Dashboard.
+ *
+ * ## Why there is no "Not implemented" wall
+ *
+ * There used to be an account card and six rows listing components that do not
+ * exist. Both were removed. The Audit tab exists precisely to say what has and
+ * has not reported, in one place, grouped by component — repeating six of its
+ * rows here as prose was duplication that made this screen read as broken rather
+ * than as a settings page. What remains is a single row pointing at the audit.
  *
  * ## Why there is no sign-in row
  *
  * A row that opened an empty login form would be a dead end. There is no
  * authentication, no user record and nothing that could be stored about one, so
- * the account section is an explanation of that fact rather than a control that
- * cannot do anything.
+ * there is no account section at all rather than a control that cannot do
+ * anything. Authentication is deferred until it is asked for.
+ *
+ * ## Why some rows have no control
+ *
+ * "App language", "Text size" and "Reduce motion" are statements, not settings,
+ * and are drawn as `ListRow` without `onPress` — so they carry no chevron and
+ * look like the facts they are. Each says what the app actually does: it follows
+ * the phone. A control that offered an override the app does not implement would
+ * be the "button that appears functional but silently does nothing" the brief
+ * rules out.
  */
-export function MoreScreen({ onReplayIntro, onOpenOled }: MoreScreenProps): React.JSX.Element {
+export function MoreScreen({
+  onReplayIntro,
+  onOpenOled,
+  onOpenAudit,
+}: MoreScreenProps): React.JSX.Element {
   const { palette, mode, scheme, setMode } = useTheme();
   const { preferences, updatePreferences, profile, speaker } = useAppState();
 
@@ -84,7 +107,7 @@ export function MoreScreen({ onReplayIntro, onOpenOled }: MoreScreenProps): Reac
 
   return (
     <Screen scroll bottomInset={screenLayout.tabBarHeight} testID="more-screen">
-      <ScreenHeader title="More" subtitle="Appearance, languages and what is not built yet" />
+      <ScreenHeader title="More" subtitle="Appearance, languages and device settings" />
 
       {/* ----------------------------------------------------------- intro */}
 
@@ -115,32 +138,26 @@ export function MoreScreen({ onReplayIntro, onOpenOled }: MoreScreenProps): Reac
         </AppText>
       </Card>
 
-      {/* --------------------------------------------------- personalisation */}
+      {/* --------------------------------------------------- accessibility */}
 
-      <SectionHeader label="Personalisation" />
+      <SectionHeader label="Accessibility" detail="What the app takes from your phone." />
       <Card style={styles.group}>
+        <ListRow
+          label="App language"
+          value="English"
+          description="The interface is written in English. No other language pack exists yet, so there is nothing to switch between."
+        />
         <ListRow
           label="Text size"
           value="Follows system"
           description="The interface uses your phone's font size setting. There is no in-app override, so a large system font enlarges every screen."
-          last={onOpenOled === undefined}
         />
         <ListRow
           label="Reduce motion"
           value="Follows system"
           description="When your phone asks for reduced motion, the launch sequence is skipped and animated indicators hold still."
-          last={onOpenOled === undefined}
+          last
         />
-        {onOpenOled !== undefined && (
-          <ListRow
-            label="OLED layout"
-            value="OLED Studio"
-            description="Which lines the glove's panel shows, their order and size, and the loading indicator."
-            icon="oled"
-            onPress={onOpenOled}
-            last
-          />
-        )}
       </Card>
 
       {/* ------------------------------------------------------- languages */}
@@ -173,8 +190,8 @@ export function MoreScreen({ onReplayIntro, onOpenOled }: MoreScreenProps): Reac
       </Card>
       <AppText variant="caption" color={palette.textMuted}>
         These are two independent settings. The input profile decides which signs would be read;
-        the output language decides how the result is written and spoken. Neither has a
-        vocabulary or a model behind it yet.
+        the output language decides how the result is written and spoken. Neither has a vocabulary
+        or a model behind it yet.
       </AppText>
 
       {/* ----------------------------------------------------------- voice */}
@@ -189,67 +206,40 @@ export function MoreScreen({ onReplayIntro, onOpenOled }: MoreScreenProps): Reac
         testID="more-voice-panel"
       />
 
-      {/* --------------------------------------------------------- account */}
+      {/* --------------------------------------------------------- devices */}
 
-      <SectionHeader label="Account" />
-      <Card style={styles.note}>
-        <View style={[styles.noteIcon, { backgroundColor: palette.unknownSurface }]}>
-          <Icon name="info" size={18} color={palette.unknown} />
-        </View>
-        <View style={styles.noteText}>
-          <AppText variant="heading">Not implemented</AppText>
-          <AppText variant="caption" color={palette.textSecondary}>
-            There is no sign-in, no profile and no user record — nothing is stored about you, and
-            nothing on this screen is uploaded anywhere. Every preference here lives in this
-            device's local storage and is removed when the app's data is cleared.
-          </AppText>
-          <AppText variant="caption" color={palette.textMuted}>
-            The groundwork for a server-backed account is in place: all persistence goes through
-            one storage interface and all remote calls would go through one client, so adding
-            authentication later would not mean redesigning these screens. None of it exists yet,
-            and no credential handling has been written.
-          </AppText>
-        </View>
+      <SectionHeader label="Devices" detail="Settings for the glove hardware." />
+      <Card style={styles.group}>
+        {onOpenOled !== undefined && (
+          <ListRow
+            label="OLED layout"
+            value="OLED Studio"
+            description="Which lines each glove's panel would show, their order and size, the loading indicator, and the startup view."
+            icon="oled"
+            onPress={onOpenOled}
+            last={onOpenAudit === undefined}
+          />
+        )}
+        {onOpenAudit !== undefined && (
+          <ListRow
+            label="Component status"
+            value="Audit"
+            description="What each part reports, and what nothing has reported — the Bluetooth transport, the recognition model, translation and the OLED command set."
+            icon="audit"
+            onPress={onOpenAudit}
+            last
+          />
+        )}
       </Card>
 
       {/* ----------------------------------------------------------- about */}
 
-      <SectionHeader label="About" detail="What this build does and does not contain." />
+      <SectionHeader label="About" />
       <Card style={styles.group}>
         <AboutRow
           label="App"
           value={`Sanket Vaanni ${APP_VERSION}`}
           description="An offline-first companion for a two-glove sign-language device."
-        />
-        <AboutRow
-          label="Bluetooth transport"
-          value="Not implemented"
-          description="The firmware protocol — service and characteristic identifiers, frame layout, sample rate — has not been verified, so no device is contacted. The Dashboard's Demo Mode is a local simulator."
-        />
-        <AboutRow
-          label="Recognition model"
-          value="None"
-          description="No vocabulary has been defined and no model has been trained, so no sign is recognised and no confidence is ever reported."
-        />
-        <AboutRow
-          label="Translation"
-          value="Not implemented"
-          description="Sign languages are not encodings of spoken ones, so this needs a model and a vocabulary rather than a word list."
-        />
-        <AboutRow
-          label="Speech output"
-          value="Not implemented"
-          description="No text-to-speech engine is wired up. The setting is recorded, and reports itself unavailable rather than failing silently."
-        />
-        <AboutRow
-          label="OLED commands"
-          value="Not implemented"
-          description="The OLED Studio previews a layout and stores it locally. It sends nothing to a panel, because no command set has been verified."
-        />
-        <AboutRow
-          label="Accounts and sync"
-          value="Not implemented"
-          description="No login, no cloud storage, no telemetry, no analytics."
           last
         />
       </Card>
@@ -257,9 +247,10 @@ export function MoreScreen({ onReplayIntro, onOpenOled }: MoreScreenProps): Reac
       <Card sunken style={styles.note}>
         <Icon name="info" size={14} color={palette.textMuted} />
         <AppText variant="caption" color={palette.textMuted} style={styles.noteText}>
-          Every reading marked Simulated on the Dashboard and in the Audit comes from the built-in
-          demo transport. It exists so the interface can be built and reviewed before hardware
-          arrives, and it is labelled wherever it appears.
+          Every preference here lives in this device's local storage and is removed when the app's
+          data is cleared. Nothing on this screen is uploaded anywhere. Readings marked Simulated
+          come from the built-in demo transport, which exists so the interface could be built and
+          reviewed before hardware arrived.
         </AppText>
       </Card>
 
@@ -349,15 +340,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     borderRadius: radii.md,
   },
-  noteIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   noteText: {
     flex: 1,
-    gap: spacing.xs,
   },
 });

@@ -138,7 +138,11 @@ export function RootNavigator({
         {tab === 'oled' && <OledScreen />}
         {tab === 'audit' && <AuditScreen />}
         {tab === 'more' && (
-          <MoreScreen onReplayIntro={handleReplayIntro} onOpenOled={() => setTab('oled')} />
+          <MoreScreen
+            onReplayIntro={handleReplayIntro}
+            onOpenOled={() => setTab('oled')}
+            onOpenAudit={() => setTab('audit')}
+          />
         )}
       </View>
 

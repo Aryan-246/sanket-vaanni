@@ -23,6 +23,34 @@ export interface HandViewerProps {
 
 const SIDES: readonly GloveSide[] = ['left', 'right'];
 
+/** Space between the two hand columns. Mirrored by the `hands` row's `gap`. */
+const HAND_GAP = spacing.md;
+
+/** Widest a single hand column is allowed to grow, so a tablet does not get a
+ * pair of enormous hands. */
+const MAX_HAND_COLUMN = 168;
+
+/**
+ * How wide one hand's column is.
+ *
+ * Exported and pure so the arithmetic can be asserted directly. It has been
+ * wrong once already, and in a way no rendering test in this repo could see: a
+ * caption inside the figure declared its own `maxWidth`, which silently made the
+ * hand wider than the column the parent had measured for it, and the row
+ * overflowed the card and was clipped by the screen edges. The figure is not the
+ * only thing in the column — its caption is too — so the column has to be the
+ * authority rather than whichever child happens to be widest.
+ *
+ * There is deliberately **no minimum**: a floor would be a width the available
+ * space might not have, which is how the overflow happened. Half of whatever is
+ * left always fits, at any window width, by construction.
+ */
+export function handColumnWidth(windowWidth: number): number {
+  // Both sides of the page, both sides of the card, and the gap between hands.
+  const available = windowWidth - 2 * layout.screenPadding - 2 * spacing.lg - HAND_GAP;
+  return Math.max(0, Math.min(MAX_HAND_COLUMN, available / 2));
+}
+
 /**
  * Both hands in one viewer.
  *
@@ -55,10 +83,7 @@ export function HandViewer({
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
   const { width } = useWindowDimensions();
-
-  // Card padding on both sides, the page padding, and the gap between hands.
-  const available = width - 2 * layout.screenPadding - 2 * spacing.lg - spacing.md;
-  const figureWidth = Math.max(96, Math.min(168, available / 2));
+  const columnWidth = handColumnWidth(width);
 
   const wristSides = SIDES.filter((side) => live[side]);
 
@@ -82,14 +107,14 @@ export function HandViewer({
 
       <View style={styles.hands}>
         {SIDES.map((side) => (
-          <View key={side} style={styles.hand}>
+          <View key={side} style={[styles.hand, { width: columnWidth }]} testID={`hand-column-${side}`}>
             <View style={styles.handHead}>
               <AppText variant="label">{side === 'left' ? 'Left' : 'Right'}</AppText>
               <HandState side={side} live={live[side]} frame={frames[side]} />
             </View>
             <HandFigure
               frame={frames[side]}
-              width={figureWidth}
+              width={columnWidth}
               showRestReference={false}
               testID={`hand-figure-${side}`}
             />

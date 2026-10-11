@@ -491,11 +491,23 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   host: {
+    /*
+      Exactly as wide as the column its parent allotted, never wider.
+      This is the fix for a real overflow: the host used to size itself to its
+      widest child, and the caption below declared `maxWidth: 280` — so the
+      caption, not the hand, decided how wide a hand was, and two of those
+      columns could not fit inside one card. Android clipped both screen edges.
+    */
+    width: '100%',
     alignItems: 'center',
     gap: spacing.sm,
   },
   caption: {
-    maxWidth: 280,
+    /*
+      No `maxWidth`. The caption wraps to the host's width, so it can no longer
+      claim more room than the figure beside it was given.
+    */
+    alignSelf: 'stretch',
     borderRadius: radii.sm,
   },
 });

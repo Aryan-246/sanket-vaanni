@@ -19,13 +19,23 @@ import { pressByLabel, renderApp, renderedText, teardown } from './support';
 /* ------------------------------------------------------------------ helpers */
 
 /**
- * Every test leaves with real timers, however it ended.
+ * Timers are fake for the whole file, and back to real afterwards.
  *
- * Several cases below need fake timers to flush the studio's coalesced write.
- * Without this hook, a *failing* case would skip its own `jest.useRealTimers()`
- * and hand fake timers to the next test — which turns one genuine failure into a
- * second, misleading one in a different test.
+ * This is not about the coalesced write, though it flushes that too. It is about
+ * every control on this screen that dismisses through an animation: a `Sheet`
+ * stays mounted until its exit animation finishes, and under real timers that
+ * animation can still be in flight when the test ends — firing its state update
+ * into a torn-down environment and failing whichever test happened to finish
+ * first. Faking the clock makes the exit deterministic instead of racy.
+ *
+ * Restoring real timers afterwards is equally deliberate: without it, a
+ * *failing* case would skip its own `jest.useRealTimers()` and hand fake timers
+ * to the next file's tests.
  */
+beforeEach(() => {
+  jest.useFakeTimers();
+});
+
 afterEach(() => {
   jest.useRealTimers();
 });

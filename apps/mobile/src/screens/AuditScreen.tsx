@@ -5,10 +5,10 @@ import { ActionButton } from '../components/ActionButton';
 import { AppText } from '../components/AppText';
 import { Badge } from '../components/Badge';
 import { Card } from '../components/Card';
+import { CollapsibleSection } from '../components/CollapsibleSection';
 import { Icon } from '../components/Icon';
 import { Screen } from '../components/Screen';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { SectionHeader } from '../components/SectionHeader';
 import { StateChip } from '../components/StateChip';
 import { useAppState, useGlove, useLiveTranslation } from '../app/AppState';
 import { findOutputLanguage } from '../app/preferences';
@@ -16,8 +16,11 @@ import {
   appFindings,
   describeSummary,
   gloveFindings,
+  groupFindings,
+  opensByDefault,
   summarise,
   worstOf,
+  type AuditGroup,
   type Finding,
 } from '../audit/findings';
 import { DATA_SOURCE_LABEL, HEALTH_MEANING } from '../audit/status';
@@ -40,14 +43,28 @@ const SIDES: readonly GloveSide[] = ['left', 'right'];
  * *what is the evidence for this row?* Every row carries a sentence saying where
  * its state came from, and the row that has no evidence says so.
  *
+ * That produced a second problem: seventeen rows, each with a paragraph, is a
+ * page of prose nobody reads. The rows are therefore folded into the nine
+ * diagnostic areas the brief names, and only the headline and the area headings
+ * are visible until a heading is tapped.
+ *
+ * ## Why the groups are drawn rather than the flat list
+ *
+ * The rows were previously split by *subject* — one block per glove, one for the
+ * app — which meant a reader investigating the IMU had to read the left glove's
+ * link, packets, controller and flex rows to reach it, and then do it again on
+ * the right. Grouping by component puts the two hands' IMU rows together, which
+ * is the comparison a fault actually calls for.
+ *
  * ## Why there is no single "all good" badge
  *
  * The brief rules it out: "Never display a single generic green Connected badge
  * as proof that every component is working." The summary at the top therefore
- * gives counts and names the worst state rather than pronouncing a verdict, and
- * the only case where a plain positive is shown is when *every* row is healthy —
- * which cannot happen on this build, because the components the firmware has not
- * reported on are permanently `unknown`.
+ * gives counts, names the worst state, and names the groups that need attention
+ * rather than pronouncing a verdict. The only case where a plain positive is
+ * shown is when *every* row is healthy — which cannot happen on this build,
+ * because the components the firmware has not reported on are permanently
+ * `unknown`.
  *
  * ## Refresh
  *
@@ -55,7 +72,8 @@ const SIDES: readonly GloveSide[] = ['left', 'right'];
  * attempt a connection: `retry()` on a glove that is already reachable would
  * open a link the user did not ask for, which is not what a refresh button
  * means. Only gloves whose transport is `unavailable` are re-checked, because
- * for those `retry()` is exactly a re-read.
+ * for those `retry()` is exactly a re-read. It issues no command to any device
+ * and starts no scan.
  */
 export function AuditScreen(): React.JSX.Element {
   const styles = useStyles(makeStyles);
@@ -79,19 +97,12 @@ export function AuditScreen(): React.JSX.Element {
   const [measuredAtMs, setMeasuredAtMs] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
 
-  const gloveFindingsFor = useCallback(
-    (side: GloveSide) =>
-      gloveFindings({
-        snapshot: side === 'left' ? left : right,
-        calibration: calibration[side],
-        nowMs: measuredAtMs,
-      }),
-    [calibration, left, measuredAtMs, right],
-  );
-
   const findingsBySide = useMemo(
-    () => ({ left: gloveFindingsFor('left'), right: gloveFindingsFor('right') }),
-    [gloveFindingsFor],
+    () => ({
+      left: gloveFindings({ snapshot: left, calibration: calibration.left, nowMs: measuredAtMs }),
+      right: gloveFindings({ snapshot: right, calibration: calibration.right, nowMs: measuredAtMs }),
+    }),
+    [calibration, left, measuredAtMs, right],
   );
 
   const targetLanguage = findOutputLanguage(preferences.targetLanguageCode);
@@ -116,6 +127,10 @@ export function AuditScreen(): React.JSX.Element {
   );
   const summary = useMemo(() => summarise(everything), [everything]);
   const verdict = worstOf(everything);
+  const groups = useMemo(() => groupFindings(everything), [everything]);
+
+  /** The groups that contain something actually wrong, named in the summary. */
+  const attention = useMemo(() => groups.filter(opensByDefault), [groups]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -147,7 +162,7 @@ export function AuditScreen(): React.JSX.Element {
 
       {/* ------------------------------------------------------------ summary */}
 
-      <Card style={styles.summary} accentBorder={verdict !== 'healthy' && verdict !== 'unknown'}>
+      <Card style={styles.summary} accentBorder={attention.length > 0}>
         <View style={styles.summaryRow}>
           <StateChip state={verdict} />
           <AppText variant="caption" color={palette.textMuted}>
@@ -159,16 +174,29 @@ export function AuditScreen(): React.JSX.Element {
           {describeSummary(summary)}.
         </AppText>
 
+        {/*
+          What the worst state means here. Kept because the whole point of this
+          vocabulary is that `unknown` and `unavailable` are not faults, and a
+          reader who assumes otherwise will read the counts above as bad news.
+        */}
         <AppText variant="caption" color={palette.textMuted}>
           {HEALTH_MEANING[verdict]}
-          {summary.counts.unknown > 0
-            ? ' An unknown row is not a fault: it is a component nothing has reported on yet.'
-            : ''}
+        </AppText>
+
+        {/*
+          The one line that answers "is anything wrong". Naming the groups is
+          what makes it actionable — the counts say how many rows are which, but
+          not which part to look at.
+        */}
+        <AppText variant="caption" color={palette.textMuted}>
+          {attention.length === 0
+            ? 'No group reports a fault. Rows that are unknown or unavailable are not broken — nothing has reported one way or the other.'
+            : `Needs attention: ${attention.map((group) => group.label).join(', ')}.`}
         </AppText>
 
         <AppText variant="caption" color={palette.textMuted}>
-          Readings as of {new Date(measuredAtMs).toLocaleTimeString()}. Refreshing re-reads each
-          glove's transport state and does not attempt a connection.
+          Readings as of {new Date(measuredAtMs).toLocaleTimeString()}. Refresh re-reads each
+          glove's transport state. It does not scan, connect, or command any device.
         </AppText>
 
         <ActionButton
@@ -180,43 +208,15 @@ export function AuditScreen(): React.JSX.Element {
             void refresh();
           }}
           accessibilityLabel="Refresh diagnostics"
-          accessibilityHint="Re-reads each glove's transport state. Does not attempt to connect."
+          accessibilityHint="Re-reads each glove's transport state. Does not connect or scan."
         />
       </Card>
 
-      {/* ------------------------------------------------------------- gloves */}
+      {/* ------------------------------------------------------------- groups */}
 
-      {SIDES.map((side) => {
-        const findings = findingsBySide[side];
-        const worst = worstOf(findings);
-        return (
-          <View key={side} style={styles.section}>
-            <SectionHeader
-              label={side === 'left' ? 'Left glove' : 'Right glove'}
-              accessory={<StateChip state={worst} />}
-              detail="Every row states where its answer came from."
-            />
-            <Card style={styles.group}>
-              {findings.map((finding, index) => (
-                <FindingRow
-                  key={finding.key}
-                  finding={finding}
-                  last={index === findings.length - 1}
-                />
-              ))}
-            </Card>
-          </View>
-        );
-      })}
-
-      {/* ---------------------------------------------------------------- app */}
-
-      <SectionHeader label="App" detail="Independent of which gloves are connected." />
-      <Card style={styles.group}>
-        {app.map((finding, index) => (
-          <FindingRow key={finding.key} finding={finding} last={index === app.length - 1} />
-        ))}
-      </Card>
+      {groups.map((group) => (
+        <FindingsGroup key={group.key} group={group} />
+      ))}
 
       <Card sunken style={styles.note}>
         <Icon name="info" size={14} color={palette.textMuted} />
@@ -234,11 +234,43 @@ export function AuditScreen(): React.JSX.Element {
 /* --------------------------------------------------------------- sub-parts */
 
 /**
+ * One diagnostic area, folded away behind its heading.
+ *
+ * The heading carries the group's worst state so the collapsed screen still says
+ * where to look, and the blurb says what the group covers so a reader who does
+ * not know what an ADS1115 is can tell whether it is worth opening.
+ */
+function FindingsGroup({ group }: { group: AuditGroup }): React.JSX.Element {
+  return (
+    <CollapsibleSection
+      label={group.label}
+      // The row count belongs on the collapsed view: without it, the only way to
+      // find out whether a group has one row or six is to open it.
+      detail={`${group.blurb} ${group.findings.length} ${
+        group.findings.length === 1 ? 'row' : 'rows'
+      }.`}
+      accessory={<StateChip state={group.worst} />}
+      defaultOpen={opensByDefault(group)}
+    >
+      {group.findings.map((finding, index) => (
+        <FindingRow
+          key={finding.key}
+          finding={finding}
+          last={index === group.findings.length - 1}
+        />
+      ))}
+    </CollapsibleSection>
+  );
+}
+
+/**
  * One finding.
  *
- * The badge order is deliberate: the state word first, then provenance. Health
- * and source are orthogonal — simulated data can be perfectly healthy, real data
- * can be broken — so they are shown as two facts rather than merged into one.
+ * The row's facts are shown in the order a reader needs them: which part and
+ * which hand, then the state, then the evidence for it, then where the reading
+ * came from. Hand and provenance are chips rather than words because both are
+ * classifications — and because, now that a group holds both hands' rows, "which
+ * hand" is no longer answered by the surrounding heading.
  */
 function FindingRow({ finding, last }: { finding: Finding; last: boolean }): React.JSX.Element {
   const styles = useStyles(makeStyles);
@@ -253,16 +285,21 @@ function FindingRow({ finding, last }: { finding: Finding; last: boolean }): Rea
         <StateChip state={finding.state} />
       </View>
 
+      <View style={styles.chips}>
+        {finding.side !== undefined && (
+          <Badge label={finding.side === 'left' ? 'Left' : 'Right'} tone="neutral" />
+        )}
+        {finding.source !== undefined && (
+          <Badge
+            label={DATA_SOURCE_LABEL[finding.source]}
+            tone={finding.source === 'simulated' ? 'demo' : 'neutral'}
+          />
+        )}
+      </View>
+
       <AppText variant="caption" color={palette.textSecondary}>
         {finding.detail}
       </AppText>
-
-      {finding.source !== undefined && (
-        <Badge
-          label={DATA_SOURCE_LABEL[finding.source]}
-          tone={finding.source === 'simulated' ? 'demo' : 'neutral'}
-        />
-      )}
     </View>
   );
 }
@@ -277,13 +314,6 @@ const makeStyles = (palette: Palette) =>
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.md,
-    },
-    section: {
-      gap: spacing.sm,
-    },
-    group: {
-      gap: 0,
-      paddingVertical: 0,
     },
     row: {
       paddingVertical: spacing.md,
@@ -301,6 +331,11 @@ const makeStyles = (palette: Palette) =>
     },
     rowLabel: {
       flex: 1,
+    },
+    chips: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.xs,
     },
     note: {
       flexDirection: 'row',

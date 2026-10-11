@@ -603,8 +603,25 @@ describe('the Audit screen', () => {
   it('names every component the firmware has not reported on', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await pressByLabel(renderer, 'Audit');
-    const output = renderedText(renderer);
 
+    // The rows sit behind their group headings, so the test opens them the way
+    // a reader does. That it has to is the point: the collapsed screen is the
+    // summary, and the names are one tap away rather than on the first page.
+    for (const group of [
+      'Connection and ESP32',
+      'Flex sensors',
+      'Motion sensor (MPU6050)',
+      'ADC and multiplexer',
+      'OLED and battery',
+      'Calibration',
+      'Recognition and model',
+      'Language and speech',
+      'Offline and app services',
+    ]) {
+      await pressByLabel(renderer, group);
+    }
+
+    const output = renderedText(renderer);
     for (const part of [
       'ESP32 controller',
       'MPU6050 IMU',
@@ -616,6 +633,42 @@ describe('the Audit screen', () => {
     ]) {
       expect(output).toContain(part);
     }
+
+    // Both hands' rows are present, in the same group rather than in two blocks
+    // the reader has to compare by scrolling.
+    expect(output).toContain('Left');
+    expect(output).toContain('Right');
+
+    await teardown(renderer);
+  });
+
+  it('opens with every group closed, and says how many rows each holds', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await pressByLabel(renderer, 'Audit');
+    const output = renderedText(renderer);
+
+    // The diagnostic areas are named on the collapsed screen — that is what
+    // makes it a summary rather than a stub.
+    expect(output).toContain('Connection and ESP32');
+    expect(output).toContain('Flex sensors');
+    // Their rows are not.
+    expect(output).not.toContain('ESP32 controller');
+    // And the count is shown, so a reader can tell a one-row area from a
+    // six-row one without opening anything.
+    expect(output).toContain('6 rows');
+
+    await teardown(renderer);
+  });
+
+  it('names the areas that need attention rather than only counting states', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await pressByLabel(renderer, 'Audit');
+    const output = renderedText(renderer);
+
+    // Nothing is faulty on a fresh install, and the summary says exactly that
+    // instead of claiming everything is well.
+    expect(output).toContain('No group reports a fault');
+    expect(output).toContain('not broken');
 
     await teardown(renderer);
   });

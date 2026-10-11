@@ -14,6 +14,8 @@ import {
   allHealthy,
   appFindings,
   describeSummary,
+  groupFindings,
+  opensByDefault,
   gloveFindings,
   summarise,
   worstOf,
@@ -114,13 +116,25 @@ function byKey(findings: readonly Finding[], key: string): Finding {
 
 /* ------------------------------------------------------------- the summary */
 
+/**
+ * A synthetic finding, for the counting cases.
+ *
+ * Those cases are about tallying and ranking, not about which group a row lands
+ * in, so the group is defaulted here rather than repeated on every literal. The
+ * grouping cases build their own findings through the real producers, where the
+ * group is what is under test.
+ */
+function auditRow(state: HealthState, key = 'k'): Finding {
+  return { key, group: 'connection', label: key, state, detail: '' };
+}
+
 describe('summarise', () => {
   it('counts by state and reports the worst', () => {
     const summary = summarise([
-      { key: 'a', label: 'a', state: 'healthy', detail: '' },
-      { key: 'b', label: 'b', state: 'unknown', detail: '' },
-      { key: 'c', label: 'c', state: 'warning', detail: '' },
-      { key: 'd', label: 'd', state: 'warning', detail: '' },
+      auditRow('healthy', 'a'),
+      auditRow('unknown', 'b'),
+      auditRow('warning', 'c'),
+      auditRow('warning', 'd'),
     ]);
 
     expect(summary.total).toBe(4);
@@ -131,10 +145,7 @@ describe('summarise', () => {
 
   it('ranks unknown above healthy, so "no evidence" is never reassurance', () => {
     // `unknown` is not a fault, but it is not a clean bill of health either.
-    const summary = summarise([
-      { key: 'a', label: 'a', state: 'healthy', detail: '' },
-      { key: 'b', label: 'b', state: 'unknown', detail: '' },
-    ]);
+    const summary = summarise([auditRow('healthy', 'a'), auditRow('unknown', 'b')]);
 
     expect(summary.worst).toBe('unknown');
   });
@@ -144,7 +155,7 @@ describe('summarise', () => {
     // with the rows beneath it, so this delegates rather than duplicating.
     const states: HealthState[] = ['healthy', 'unknown', 'unavailable', 'warning', 'disconnected'];
 
-    expect(worstOf(states.map((state, index) => ({ key: `${index}`, label: '', state, detail: '' })))).toBe(
+    expect(worstOf(states.map((state, index) => auditRow(state, `${index}`)))).toBe(
       worstState(states),
     );
   });
@@ -155,23 +166,15 @@ describe('summarise', () => {
   });
 
   it('only calls a list fully healthy when every row reported working', () => {
-    expect(allHealthy([{ key: 'a', label: '', state: 'healthy', detail: '' }])).toBe(true);
-    expect(
-      allHealthy([
-        { key: 'a', label: '', state: 'healthy', detail: '' },
-        { key: 'b', label: '', state: 'unknown', detail: '' },
-      ]),
-    ).toBe(false);
+    expect(allHealthy([auditRow('healthy', 'a')])).toBe(true);
+    expect(allHealthy([auditRow('healthy', 'a'), auditRow('unknown', 'b')])).toBe(false);
     // An empty list is vacuously every(), which would read as "all good".
     expect(allHealthy([])).toBe(false);
   });
 
   it('uses the shared state vocabulary in its counts line', () => {
     const line = describeSummary(
-      summarise([
-        { key: 'a', label: '', state: 'unavailable', detail: '' },
-        { key: 'b', label: '', state: 'healthy', detail: '' },
-      ]),
+      summarise([auditRow('unavailable', 'a'), auditRow('healthy', 'b')]),
     );
 
     expect(line).toContain(HEALTH_LABEL.unavailable.toLowerCase());
@@ -489,5 +492,126 @@ describe('appFindings', () => {
       expect(finding.detail.length).toBeGreaterThan(HEALTH_LABEL[finding.state].length + 4);
       expect(finding.detail).not.toBe(HEALTH_LABEL[finding.state]);
     }
+  });
+});
+
+/* ---------------------------------------------------------------- grouping */
+
+describe('grouping the findings', () => {
+  const everyGroupInput = (): Finding[] => [
+    ...audit({ snapshot: connectedSnapshot() }).map((finding) => ({ ...finding, side: 'left' as const })),
+    ...appAudit(),
+  ];
+
+  it('puts every finding in exactly one group', () => {
+    // A row that matches no group is a row the screen never draws, which is how
+    // a fault disappears from a diagnostics screen.
+    const groups = groupFindings(everyGroupInput());
+    const grouped = groups.flatMap((group) => group.findings);
+
+    expect(grouped).toHaveLength(everyGroupInput().length);
+    for (const finding of everyGroupInput()) {
+      expect(grouped.filter((entry) => entry.key === finding.key)).toHaveLength(1);
+    }
+  });
+
+  it('draws the groups in the fixed order, not sorted by severity', () => {
+    // A list that reorders itself under the reader's finger is worse than one
+    // that is merely unsorted.
+    const keys = groupFindings(everyGroupInput()).map((group) => group.key);
+
+    expect(keys).toEqual([
+      'connection',
+      'flex',
+      'motion',
+      'adc',
+      'oled',
+      'calibration',
+      'recognition',
+      'language',
+      'services',
+    ]);
+  });
+
+  it('omits a group with no findings rather than drawing it empty', () => {
+    // An empty group would read as "this part reported nothing", which is a
+    // claim about hardware rather than about the screen.
+    const groups = groupFindings(appAudit());
+
+    expect(groups.map((group) => group.key)).toEqual(['recognition', 'language', 'services']);
+  });
+
+  it('reports each group\u2019s worst state, delegating to the shared scale', () => {
+    // Two severity scales in one app is how a heading's chip ends up disagreeing
+    // with the rows beneath it.
+    for (const group of groupFindings(everyGroupInput())) {
+      expect(group.worst).toBe(worstState(group.findings.map((finding) => finding.state)));
+    }
+  });
+
+  it('counts each group\u2019s rows by state', () => {
+    const groups = groupFindings(everyGroupInput());
+    const connection = groups.find((group) => group.key === 'connection');
+
+    expect(connection?.findings).toHaveLength(3);
+    expect(
+      connection === undefined
+        ? 0
+        : connection.counts.warning +
+            connection.counts.healthy +
+            connection.counts.disconnected +
+            connection.counts.unavailable +
+            connection.counts.unknown,
+    ).toBe(3);
+  });
+
+  it('keeps both hands\u2019 rows of one component together', () => {
+    // The reason for grouping by component: a fault in the IMU is investigated
+    // by comparing the two hands, which two per-glove blocks do not invite.
+    const groups = groupFindings([
+      ...audit({ snapshot: connectedSnapshot({ side: 'left' }) }),
+      ...audit({ snapshot: connectedSnapshot({ side: 'right' }) }),
+      ...appAudit(),
+    ]);
+    const motion = groups.find((group) => group.key === 'motion');
+
+    expect(motion?.findings.map((finding) => finding.side)).toEqual(['left', 'right']);
+  });
+
+  it('opens a group that holds a fault, and leaves the rest closed', () => {
+    // Opening on a warning is what keeps a real problem from hiding behind a tap
+    // the user has no reason to make. `unavailable` and `unknown` are the honest
+    // resting states here, and opening those would open everything.
+    //
+    // The fault used is "connected but silent" — a link that is up with no frame
+    // ever arriving on it. A link that *is* streaming is healthy, not a warning,
+    // which is why the silent snapshot is the one that matters here.
+    const silent = connectedSnapshot({
+      lastPacketAtMs: null,
+      packetCount: 0,
+      raw: null,
+      calibrated: null,
+    });
+    const groups = groupFindings([...audit({ snapshot: silent }), ...appAudit()]);
+
+    for (const group of groups) {
+      const faulty = group.worst === 'warning' || group.worst === 'disconnected';
+      expect(opensByDefault(group)).toBe(faulty);
+    }
+
+    // Concretely: the connected-but-silent glove is a warning, so it opens.
+    const connection = groups.find((group) => group.key === 'connection');
+    expect(connection?.worst).toBe('warning');
+    expect(opensByDefault(connection!)).toBe(true);
+
+    // Nothing reports a fault about a battery, so that group stays shut.
+    const oled = groups.find((group) => group.key === 'oled');
+    expect(opensByDefault(oled!)).toBe(false);
+  });
+
+  it('opens nothing when there is no fault to show', () => {
+    const groups = groupFindings(appAudit());
+
+    expect(groups.some(opensByDefault)).toBe(false);
   });
 });

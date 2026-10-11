@@ -42,12 +42,150 @@ import { FINGERS } from '../sensors/types';
 export interface Finding {
   /** Stable across renders; used as the list key. */
   readonly key: string;
+  /**
+   * Which diagnostic group this row belongs to.
+   *
+   * Required rather than optional, and that is the whole point: a row that
+   * belongs to no group would be a row the screen never draws, and a fault that
+   * silently disappears from a diagnostics screen is worse than one displayed
+   * badly. Making this mandatory means adding a finding forces the author to
+   * decide where it is shown.
+   */
+  readonly group: AuditGroupKey;
   readonly label: string;
   readonly state: HealthState;
   /** What the state is based on. Never a restatement of the state word. */
   readonly detail: string;
   /** Present when the row is about a reading, so provenance can be shown. */
   readonly source?: DataSource;
+  /**
+   * Which glove this row is about, when it is about one.
+   *
+   * The groups are named by component rather than by hand — "Flex sensors", not
+   * "Left glove" — because a reader investigating a fault asks about the part
+   * first. The hand therefore moves onto the row.
+   */
+  readonly side?: GloveSide;
+}
+
+/* ------------------------------------------------------------------- groups */
+
+/**
+ * The diagnostic areas, in the order the screen shows them.
+ *
+ * The order runs from the physical link inward: the connection, then the
+ * sensors it carries, then the computed layers, then the services that do not
+ * touch a glove at all. It is fixed rather than severity-sorted so the screen
+ * does not rearrange itself under the reader's finger.
+ */
+export type AuditGroupKey =
+  | 'connection'
+  | 'flex'
+  | 'motion'
+  | 'adc'
+  | 'oled'
+  | 'calibration'
+  | 'recognition'
+  | 'language'
+  | 'services';
+
+export const AUDIT_GROUP_ORDER: readonly AuditGroupKey[] = [
+  'connection',
+  'flex',
+  'motion',
+  'adc',
+  'oled',
+  'calibration',
+  'recognition',
+  'language',
+  'services',
+];
+
+export const AUDIT_GROUP_LABEL: Record<AuditGroupKey, string> = {
+  connection: 'Connection and ESP32',
+  flex: 'Flex sensors',
+  motion: 'Motion sensor (MPU6050)',
+  adc: 'ADC and multiplexer',
+  oled: 'OLED and battery',
+  calibration: 'Calibration',
+  recognition: 'Recognition and model',
+  language: 'Language and speech',
+  services: 'Offline and app services',
+};
+
+/**
+ * One line saying what a group covers.
+ *
+ * Shown on the collapsed header. A group name alone — "ADC and multiplexer" —
+ * tells a non-technical reader nothing about whether they need to open it, so
+ * each group says what it is about in the same breath.
+ */
+export const AUDIT_GROUP_BLURB: Record<AuditGroupKey, string> = {
+  connection: 'The link to each glove, whether frames arrive on it, and the controller.',
+  flex: 'The five bend channels on each glove.',
+  motion: 'The accelerometer and gyroscope part, and what it cannot measure.',
+  adc: 'The parts that digitise the bend channels and switch between them.',
+  oled: 'The panel on each glove, and the battery.',
+  calibration: 'Whether bend readings have been anchored to measured positions.',
+  recognition: 'The sign vocabulary, and whether a model has evaluated any input.',
+  language: 'Translation, speech output, and the languages they cover.',
+  services: 'Bluetooth permissions and the backend client.',
+};
+
+/** One group of findings, with the worst state among them. */
+export interface AuditGroup {
+  readonly key: AuditGroupKey;
+  readonly label: string;
+  readonly blurb: string;
+  readonly findings: readonly Finding[];
+  /** Worst state in this group, for the collapsed header's chip. */
+  readonly worst: HealthState;
+  readonly counts: Readonly<Record<HealthState, number>>;
+}
+
+function emptyCounts(): Record<HealthState, number> {
+  return { healthy: 0, warning: 0, disconnected: 0, unavailable: 0, unknown: 0 };
+}
+
+/**
+ * Buckets findings into the groups the screen draws.
+ *
+ * Groups with no findings are omitted rather than drawn empty: an empty group
+ * would read as "this component reported nothing", which is a claim about
+ * hardware rather than about the screen. On this build every group has rows, so
+ * the distinction only matters if a group is ever added ahead of its findings.
+ */
+export function groupFindings(findings: readonly Finding[]): AuditGroup[] {
+  return AUDIT_GROUP_ORDER.map((key): AuditGroup | null => {
+    const inGroup = findings.filter((finding) => finding.group === key);
+    if (inGroup.length === 0) return null;
+
+    const counts = emptyCounts();
+    for (const finding of inGroup) counts[finding.state] += 1;
+
+    return {
+      key,
+      label: AUDIT_GROUP_LABEL[key],
+      blurb: AUDIT_GROUP_BLURB[key],
+      findings: inGroup,
+      worst: worstOf(inGroup),
+      counts,
+    };
+  }).filter((group): group is AuditGroup => group !== null);
+}
+
+/**
+ * Whether a group is worth opening without being asked.
+ *
+ * Only a fault the user can act on opens itself: `warning` and `disconnected`
+ * are the two states that mean something *is* wrong. `unavailable` and `unknown`
+ * are the honest resting states of this build, and opening every group that
+ * contained one would open all of them — which is the clutter the collapsed
+ * layout exists to remove. Opening on a warning is what keeps a real problem
+ * from hiding behind a tap.
+ */
+export function opensByDefault(group: AuditGroup): boolean {
+  return group.worst === 'warning' || group.worst === 'disconnected';
 }
 
 export interface AuditSummary {
@@ -130,6 +268,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   /* 1 — the link itself. */
   findings.push({
     key: `${side}.link`,
+    group: 'connection',
+    side,
     label: 'BLE link',
     state: linkHealth(link),
     detail:
@@ -153,6 +293,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   if (snapshot.lastPacketAtMs === null) {
     findings.push({
       key: `${side}.packets`,
+      group: 'connection',
+      side,
       label: 'Sensor packets',
       state: link.kind === 'connected' ? 'warning' : 'unknown',
       detail:
@@ -166,6 +308,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
     const fresh = ageMs <= PACKET_STALE_MS;
     findings.push({
       key: `${side}.packets`,
+      group: 'connection',
+      side,
       label: 'Sensor packets',
       state: fresh ? 'healthy' : 'warning',
       detail: `${snapshot.packetCount} frame${snapshot.packetCount === 1 ? '' : 's'} this session, last ${
@@ -178,6 +322,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   /* 3 — the controller. Never reported by any firmware, so never healthy. */
   findings.push({
     key: `${side}.esp32`,
+    group: 'connection',
+    side,
     label: 'ESP32 controller',
     state: link.kind === 'unavailable' ? 'unavailable' : 'unknown',
     detail:
@@ -193,6 +339,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   const demoCalibration = calibration.capturedAtMs === 0;
   findings.push({
     key: `${side}.calibration`,
+    group: 'calibration',
+    side,
     label: 'Calibration',
     state: demoCalibration ? 'unavailable' : 'healthy',
     detail: demoCalibration
@@ -207,6 +355,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   /* 6 — the IMU. */
   findings.push({
     key: `${side}.mpu6050`,
+    group: 'motion',
+    side,
     label: 'MPU6050 IMU',
     state: 'unknown',
     detail:
@@ -216,6 +366,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   /* 7, 8 — the ADC and the multiplexer. */
   findings.push({
     key: `${side}.ads1115`,
+    group: 'adc',
+    side,
     label: 'ADS1115 ADC',
     state: 'unknown',
     detail:
@@ -224,6 +376,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
 
   findings.push({
     key: `${side}.cd74hc4067`,
+    group: 'adc',
+    side,
     label: 'CD74HC4067 multiplexer',
     state: 'unknown',
     detail:
@@ -233,6 +387,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   /* 9 — the panel. */
   findings.push({
     key: `${side}.oled`,
+    group: 'oled',
+    side,
     label: 'OLED panel',
     state: 'unknown',
     detail:
@@ -242,6 +398,8 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   /* 10 — the pack. */
   findings.push({
     key: `${side}.battery`,
+    group: 'oled',
+    side,
     label: 'Battery',
     state: 'unavailable',
     detail:
@@ -272,6 +430,8 @@ function flexFinding(side: GloveSide, snapshot: GloveSnapshot): Finding {
   if (values === null) {
     return {
       key: `${side}.flex`,
+      group: 'flex',
+      side,
       label: 'Five flex channels',
       state: 'unknown',
       detail: `No reading from any channel. ${listed}.`,
@@ -281,6 +441,8 @@ function flexFinding(side: GloveSide, snapshot: GloveSnapshot): Finding {
 
   return {
     key: `${side}.flex`,
+    group: 'flex',
+    side,
     label: 'Five flex channels',
     state: count === 5 ? 'healthy' : 'warning',
     detail:
@@ -314,7 +476,11 @@ function isFiniteReading(value: number): boolean {
  * one whose detail names a next step.
  */
 function recognitionFinding(outcome: RecognitionOutcome): Finding {
-  const base = { key: 'app.recognition', label: 'Recognition and model' } as const;
+  const base = {
+    key: 'app.recognition',
+    group: 'recognition',
+    label: 'Recognition and model',
+  } as const;
 
   switch (outcome.kind) {
     case 'unavailable':
@@ -399,6 +565,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
   return [
     {
       key: 'app.profile',
+      group: 'recognition',
       label: 'Sign language profile',
       // A profile whose vocabulary is empty cannot recognise anything, so
       // `healthy` would be the wrong word no matter how correct the setting is.
@@ -411,6 +578,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
     recognitionFinding(input.recognition),
     {
       key: 'app.translation',
+      group: 'language',
       label: 'Translation',
       state: translator.isAvailable ? 'healthy' : 'unavailable',
       detail:
@@ -419,6 +587,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
     },
     {
       key: 'app.speech',
+      group: 'language',
       label: 'Speech output',
       state: speaker.isAvailable ? 'healthy' : 'unavailable',
       detail:
@@ -427,6 +596,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
     },
     {
       key: 'app.speech-language',
+      group: 'language',
       label: 'Speech language coverage',
       state: input.targetLanguageSpeechWired ? 'healthy' : 'unavailable',
       detail: input.targetLanguageSpeechWired
@@ -435,6 +605,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
     },
     {
       key: 'app.bluetooth',
+      group: 'services',
       label: 'Bluetooth adapter and permissions',
       state: 'unknown',
       detail:
@@ -442,6 +613,7 @@ export function appFindings(input: AppAuditInput): Finding[] {
     },
     {
       key: 'app.network',
+      group: 'services',
       label: 'Network access',
       state: 'unavailable',
       detail:

@@ -108,8 +108,7 @@ export function TranslatorPanel({
       <Result outcome={outcome} />
 
       <AppText variant="caption" color={palette.textMuted} style={styles.footnote}>
-        Translation requires a vocabulary and a model, neither of which exists. Until
-        then this panel reports why it has nothing to show rather than producing text.
+        Needs a vocabulary and a model, neither of which exists yet.
       </AppText>
 
       <Sheet

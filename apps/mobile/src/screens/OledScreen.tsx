@@ -38,6 +38,7 @@ import {
   type OledItem,
   type OledItemKind,
   type OledItemTiming,
+  type OledLayout,
   type OledLoadingStyle,
   type OledPhase,
   type OledTextSize,
@@ -104,15 +105,14 @@ const ALIGN_LABEL: Record<OledAlign, string> = {
 /**
  * Bytes one full frame occupies in the panel's own memory.
  *
- * 128 × 64 pixels at one bit per pixel. This is arithmetic on the geometry, not
- * a measurement — it says how much a *single* frame costs, not how fast it can
- * be sent. The transport's budget is unknown, which is exactly why the media
- * section below refuses to promise a frame count or a playback rate.
+ * 128 × 64 pixels at one bit per pixel. Arithmetic on the geometry, not a
+ * measurement: it says what a *single* frame costs, not how fast one can be
+ * sent. The transport's budget is unknown, which is why the media section
+ * promises no frame count and no playback rate.
  */
 const FRAME_BYTES = (OLED_WIDTH * OLED_HEIGHT) / 8;
 
-/** What a name sheet is being used for. */
-type NameMode = 'create' | 'saveAsNew' | 'rename';
+/** What a name sheet is being used for. */type NameMode = 'create' | 'saveAsNew' | 'rename';
 
 /**
  * The "no startup view" label.
@@ -125,7 +125,12 @@ const NO_HOLD = 'No hold';
 /** A pending destructive action, held here so the dialog can name its target. */
 type Confirm =
   | { readonly kind: 'restore' }
-  | { readonly kind: 'delete'; readonly id: string; readonly name: string };
+  | { readonly kind: 'delete'; readonly id: string; readonly name: string }
+  /**
+   * Unsaved edits are about to be lost. `next` is whatever the user was trying
+   * to do, run only after they confirm discarding.
+   */
+  | { readonly kind: 'discard'; readonly next: (() => void) | null };
 
 export interface OledScreenProps {
   /** Injectable clock, so tests can assert profile timestamps without real time. */
@@ -179,16 +184,20 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
     profiles,
     active,
     isLoaded,
+    isDirty,
+    save,
+    discard,
     run,
     setEnabled,
     setIntro,
+    setLayout,
     createProfile,
     saveAsNew,
     renameProfile,
     duplicateProfile,
     switchProfile,
     deleteProfile,
-    restoreProfile,
+    restoreActive,
   } = studio;
 
   const [side, setSide] = useState<GloveSide>('right');
@@ -200,7 +209,12 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
   const [draftName, setDraftName] = useState('');
   const [confirm, setConfirm] = useState<Confirm | null>(null);
 
-  const hand = active[side];
+  /*
+   * Everything on this screen renders the *draft*, not the committed profile.
+   * The preview and the controls therefore reflect unsaved edits immediately,
+   * while storage still holds the last saved configuration until Save.
+   */
+  const hand = studio.draft[side];
   const { layout, intro } = hand;
 
   const glove = useGlove(side);
@@ -236,7 +250,51 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
 
   const dispatch = useCallback((intent: OledIntent) => run(side, intent), [run, side]);
 
-  const closeEditor = useCallback(() => setEditingId(null), []);
+  /*
+   * The item editor is a *nested* editor. It opens over a draft that may already
+   * hold unsaved edits, so "close" has to mean "cancel what I did in here"
+   * rather than "keep it" — otherwise the X button silently keeps changes, which
+   * is the exact defect this milestone fixes.
+   *
+   * It therefore snapshots the layout when it opens and puts it back on the way
+   * out. `keepEditor` is the deliberate opposite: it closes and leaves the edits
+   * in the draft, still pending the studio's Save.
+   */
+  const [editorSnapshot, setEditorSnapshot] = useState<OledLayout | null>(null);
+
+  const openEditor = useCallback(
+    (id: string) => {
+      setEditorSnapshot(layout);
+      setEditingId(id);
+    },
+    [layout],
+  );
+
+  /** X, back and the scrim: discard what this sheet changed. */
+  const closeEditor = useCallback(() => {
+    if (editorSnapshot !== null) setLayout(side, editorSnapshot);
+    setEditorSnapshot(null);
+    setEditingId(null);
+  }, [editorSnapshot, setLayout, side]);
+
+  /** The sheet's explicit "Done": keep the edits in the draft. */
+  const keepEditor = useCallback(() => {
+    setEditorSnapshot(null);
+    setEditingId(null);
+  }, []);
+
+  /**
+   * Runs an action that would throw the draft away, asking first if there is
+   * anything to lose. With nothing pending there is no question to ask, so the
+   * action just happens.
+   */
+  const guarded = useCallback(
+    (next: () => void) => {
+      if (isDirty) setConfirm({ kind: 'discard', next });
+      else next();
+    },
+    [isDirty],
+  );
 
   const closeNameSheet = useCallback(() => {
     setNameMode(null);
@@ -260,10 +318,47 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
   }, []);
 
   return (
-    <Screen scroll bottomInset={screenLayout.tabBarHeight} testID="oled-screen">
+    <Screen
+      scroll
+      bottomInset={screenLayout.tabBarHeight}
+      testID="oled-screen"
+      /*
+       * Pinned, because the controls that make a draft dirty are spread over a
+       * long screen: an edit made next to the intro settings must not require
+       * scrolling back up to commit. It appears only when there is something to
+       * commit, so a settled studio shows no bar at all.
+       */
+      stickyFooter={
+        isDirty ? (
+          <Card style={styles.dirtyBar}>
+            <View style={styles.dirtyText}>
+              <AppText variant="label" color={palette.warning}>
+                Unsaved changes
+              </AppText>
+              <AppText variant="caption" color={palette.textMuted}>
+                {`“${active.name}” is not stored yet.`}
+              </AppText>
+            </View>
+            <View style={styles.dirtyActions}>
+              <ActionButton
+                label="Discard"
+                tone="ghost"
+                onPress={discard}
+                accessibilityLabel="Discard unsaved changes"
+              />
+              <ActionButton
+                label="Save"
+                onPress={save}
+                accessibilityLabel="Save this profile"
+              />
+            </View>
+          </Card>
+        ) : undefined
+      }
+    >
       <ScreenHeader
         title="OLED Studio"
-        subtitle={`SSD1306 · ${OLED_WIDTH} × ${OLED_HEIGHT} · monochrome`}
+        subtitle={`Monochrome ${OLED_WIDTH} × ${OLED_HEIGHT} panel · preview only`}
         accessory={<Badge label="Demo Preview" tone="demo" dot />}
       />
 
@@ -353,7 +448,7 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         <Detail
           label="Reported by the panel"
           value="Not reported"
-          note="No OLED command set and no read-back have been verified, so the app cannot know whether this panel is lit."
+          note="The app has no read-back, so it cannot know whether this panel is lit."
         />
       </Card>
 
@@ -432,7 +527,7 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
               item={item}
               index={index}
               total={layout.items.length}
-              onPress={() => setEditingId(item.id)}
+              onPress={() => openEditor(item.id)}
               last={index === layout.items.length - 1}
             />
           ))}
@@ -526,15 +621,14 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
           }}
           keyboardType="number-pad"
           maxLength={5}
-          hint={`Between 0 and ${MAX_INTRO_MS}. Saved as you type; anything outside the range is brought to the nearest end.`}
+          hint={`0 to ${MAX_INTRO_MS}. Edits stay in the preview until you press Save.`}
         />
 
         <View style={styles.stateRow}>
           <View style={styles.stateRowText}>
             <AppText variant="body">Animate the loading indicator</AppText>
             <AppText variant="caption" color={palette.textMuted}>
-              A moving indicator is the only animation an SSD1306 can express without a
-              converted bitmap sequence.
+              The panel can move an indicator without a converted bitmap sequence.
             </AppText>
           </View>
           <Toggle
@@ -605,19 +699,17 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
           <Badge label="Not implemented" tone="warning" />
         </View>
 
+        {/*
+          One paragraph, not two. The first used to name the app's own missing
+          image decoder and dither step, and the second restated the transport
+          caveat the standing warning already carries. What is load-bearing stays:
+          the conversion is absent, and the frame size is the one figure here that
+          is arithmetic rather than a measurement.
+        */}
         <AppText variant="caption" color={palette.textSecondary}>
-          A still image has to be converted to a monochrome 128×64 bitmap, and a short animation
-          to a sequence of those bitmaps. That conversion is not part of this build: there is no
-          image decoder or dithering step in the app, and no converted frame has ever been
-          produced, so there is nothing here to preview and no control that would pretend
-          otherwise.
-        </AppText>
-
-        <AppText variant="caption" color={palette.textMuted}>
-          What is fixed by the hardware: 128 × 64 pixels at one bit per pixel, so one full frame
-          is {FRAME_BYTES} bytes before any framing the transport adds. How many of those frames
-          fit, and how fast they can be sent, depends on a firmware transport that has not been
-          verified — so no frame count or playback rate is promised here.
+          A still image would have to be converted to a monochrome {OLED_WIDTH} × {OLED_HEIGHT}
+          one-bit bitmap — {FRAME_BYTES} bytes per frame — and that conversion is not part of this
+          build, so there is nothing here to preview and no control that would pretend otherwise.
         </AppText>
       </Card>
 
@@ -648,6 +740,7 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         index={editingIndex}
         total={layout.items.length}
         onClose={closeEditor}
+        onKeep={keepEditor}
         onDispatch={dispatch}
       />
 
@@ -656,14 +749,23 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         onClose={() => setProfilesOpen(false)}
         profiles={profiles}
         activeId={active.id}
-        onSwitch={switchProfile}
-        onDuplicate={duplicateProfile}
+        // Switching, creating and duplicating all move the active profile, and
+        // the draft is bound to it — so each would drop unsaved edits. They ask
+        // first, but only when there is something to lose.
+        onSwitch={(id) => guarded(() => switchProfile(id))}
+        onDuplicate={(id) => guarded(() => duplicateProfile(id))}
         onDelete={(id, name) => {
           setProfilesOpen(false);
-          setConfirm({ kind: 'delete', id, name });
+          const ask = (): void => setConfirm({ kind: 'delete', id, name });
+          // Deleting some other profile costs nothing; deleting the one being
+          // edited costs the draft, so that case asks about the draft first.
+          if (isDirty && id === active.id) setConfirm({ kind: 'discard', next: ask });
+          else ask();
         }}
         onRename={(id, name) => openNameSheet('rename', id, name)}
-        onCreate={() => openNameSheet('create', null, '')}
+        onCreate={() => guarded(() => openNameSheet('create', null, ''))}
+        // Not guarded: this copies the *draft*, so the edits the user has made
+        // are carried into the new profile rather than lost.
         onSaveAsNew={() => openNameSheet('saveAsNew', null, `${active.name} copy`)}
       />
 
@@ -717,15 +819,39 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
       */}
       <ConfirmDialog
         visible={confirm !== null}
-        title={confirm?.kind === 'delete' ? 'Delete this profile?' : 'Restore defaults?'}
+        title={
+          confirm?.kind === 'delete'
+            ? 'Delete this profile?'
+            : confirm?.kind === 'discard'
+              ? 'Discard unsaved changes?'
+              : 'Restore defaults?'
+        }
         message={confirmMessage(confirm, active.name, hidden)}
-        confirmLabel={confirm?.kind === 'delete' ? 'Delete' : 'Restore'}
-        cancelLabel={confirm?.kind === 'delete' ? 'Keep it' : 'Keep my layout'}
+        confirmLabel={
+          confirm?.kind === 'delete'
+            ? 'Delete'
+            : confirm?.kind === 'discard'
+              ? 'Discard changes'
+              : 'Restore'
+        }
+        cancelLabel={
+          confirm?.kind === 'delete'
+            ? 'Keep it'
+            : confirm?.kind === 'discard'
+              ? 'Keep editing'
+              : 'Keep my layout'
+        }
         destructive
         onConfirm={() => {
-          if (confirm?.kind === 'delete') deleteProfile(confirm.id);
-          if (confirm?.kind === 'restore') restoreProfile(active.id);
+          const pending = confirm;
           setConfirm(null);
+          if (pending?.kind === 'delete') deleteProfile(pending.id);
+          if (pending?.kind === 'restore') restoreActive();
+          if (pending?.kind === 'discard') {
+            discard();
+            // Whatever the user was trying to do, now that the draft is gone.
+            pending.next?.();
+          }
         }}
         onCancel={() => setConfirm(null)}
       />
@@ -738,11 +864,21 @@ function confirmMessage(confirm: Confirm | null, activeName: string, hidden: num
   if (confirm?.kind === 'delete') {
     return `This removes the profile "${confirm.name}" from this device, including both of its panel configurations. No other profile is changed.`;
   }
+  if (confirm?.kind === 'discard') {
+    return `The changes you have made to "${activeName}" have not been saved. Discarding puts both panels back to the last saved version of this profile. Nothing that has been saved is affected.`;
+  }
+  /*
+   * The restore is a draft edit, so the wording has to promise less than the old
+   * version did: it replaces the working copy in front of the user, and storage
+   * is not touched until Save. Saying "discards" here without that would read as
+   * a write that has already happened.
+   */
+  const tail = ' Other profiles are kept. Nothing is stored until you press Save.';
   return hidden > 0
-    ? `This discards both hands of "${activeName}" and restores the default layout, including bringing back ${hidden} hidden ${
+    ? `This replaces both hands of "${activeName}" with the default layout, including bringing back ${hidden} hidden ${
         hidden === 1 ? 'item' : 'items'
-      }. Other profiles are kept.`
-    : `This discards both hands of "${activeName}" and restores the default layout. Other profiles are kept.`;
+      }.${tail}`
+    : `This replaces both hands of "${activeName}" with the default layout.${tail}`;
 }
 
 /* --------------------------------------------------------------- sub-parts */
@@ -763,10 +899,12 @@ function Detail({
   return (
     <View style={styles.detail}>
       <View style={styles.detailHead}>
-        <AppText variant="caption" color={palette.textSecondary}>
+        <AppText variant="caption" color={palette.textSecondary} style={styles.detailLabel}>
           {label}
         </AppText>
-        <AppText variant="label">{value}</AppText>
+        <AppText variant="label" style={styles.detailValue}>
+          {value}
+        </AppText>
       </View>
       {note !== undefined && (
         <AppText variant="caption" color={palette.textMuted}>
@@ -964,12 +1102,16 @@ function ItemEditor({
   index,
   total,
   onClose,
+  onKeep,
   onDispatch,
 }: {
   item: OledItem | null;
   index: number;
   total: number;
+  /** Discards what this sheet changed — the X, back and the scrim all mean this. */
   onClose: () => void;
+  /** Keeps what this sheet changed, pending the studio's Save. */
+  onKeep: () => void;
   onDispatch: (intent: OledIntent) => void;
 }): React.JSX.Element {
   const styles = useStyles(makeStyles);
@@ -978,9 +1120,13 @@ function ItemEditor({
   // The sheet stays mounted through its exit animation, so it needs the item it
   // was last showing: `editingId` is cleared the instant it starts closing, and
   // rendering `null` there would collapse the panel mid-slide.
-  const retained = useRef<OledItem | null>(null);
-  if (item !== null) retained.current = item;
-  const shown = retained.current;
+  //
+  // The index is retained with it. Reading it fresh would show "Item 0 of 4"
+  // for the length of the exit animation, because a cleared id searches to -1.
+  const retained = useRef<{ item: OledItem; index: number } | null>(null);
+  if (item !== null && index >= 0) retained.current = { item, index };
+  const shown = retained.current?.item ?? null;
+  const shownIndex = retained.current?.index ?? 0;
 
   // Drafts are re-seeded only when a *different* item is opened. Re-seeding on
   // every render would fight the user's typing, because each keystroke produces
@@ -1005,20 +1151,34 @@ function ItemEditor({
       visible={item !== null}
       onClose={onClose}
       title={OLED_KIND_LABEL[shown.kind]}
-      description={`Item ${index + 1} of ${total}. Changes reach the preview immediately and are saved as you go.`}
+      description={`Item ${shownIndex + 1} of ${total}. Edits appear in the preview straight away. The X discards them; Done keeps them until you press Save in the Studio.`}
       footer={
         <>
-          <ActionButton label="Done" onPress={onClose} />
           <ActionButton
             label="Delete item"
             tone="danger"
             icon="trash"
             onPress={() => {
               onDispatch({ type: 'remove', id: shown.id });
-              onClose();
+              // `onKeep`, not `onClose`: closing would restore the snapshot and
+              // put the row straight back.
+              onKeep();
             }}
             accessibilityLabel={`Delete ${OLED_KIND_LABEL[shown.kind]}`}
           />
+          <View style={styles.editorActions}>
+            <ActionButton
+              label="Cancel"
+              tone="ghost"
+              onPress={onClose}
+              style={styles.editorAction}
+            />
+            <ActionButton
+              label="Done"
+              onPress={onKeep}
+              style={styles.editorAction}
+            />
+          </View>
         </>
       }
     >
@@ -1321,6 +1481,20 @@ const makeStyles = (palette: Palette) =>
       justifyContent: 'space-between',
       gap: spacing.sm,
     },
+    /*
+     * Both sides need a shrink floor. Without one, a long label beside a long
+     * value has nothing to give: the row is `space-between`, so neither child
+     * yields and the pair overflows the card instead of one of them wrapping.
+     * Seen at 360 dp with the 1.4x font scale, where "Reported by the panel" and
+     * "Not reported" are together wider than the card's measure.
+     */
+    detailLabel: {
+      flexShrink: 1,
+    },
+    detailValue: {
+      flexShrink: 1,
+      textAlign: 'right',
+    },
     inlineWarn: {
       flexDirection: 'row',
       alignItems: 'flex-start',
@@ -1374,5 +1548,32 @@ const makeStyles = (palette: Palette) =>
     editorRowText: {
       flex: 1,
       gap: 2,
+    },
+    /*
+     * The pinned Save/Discard bar.
+     *
+     * Opaque rather than translucent: it floats over the scrolling content, and
+     * a half-transparent bar would let button labels and panel rows show
+     * through the buttons, which at this size reads as a rendering fault.
+     */
+    dirtyBar: {
+      gap: spacing.md,
+      borderColor: palette.warning,
+    },
+    dirtyText: {
+      gap: 2,
+    },
+    dirtyActions: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+    },
+    /** Cancel and Done share the row, so each takes half of it. */
+    editorActions: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+    },
+    editorAction: {
+      flex: 1,
     },
   });

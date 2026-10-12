@@ -154,10 +154,15 @@ export function AuditScreen(): React.JSX.Element {
 
   return (
     <Screen scroll bottomInset={screenLayout.tabBarHeight} testID="audit-screen">
+      {/*
+        No verdict chip in the header. It was here *and* at the top of the summary
+        card forty points below, so the same word appeared twice before the reader
+        had seen a single row. The summary card is where it belongs: that is where
+        "worst of N" gives it a meaning.
+      */}
       <ScreenHeader
         title="Audit"
         subtitle="What each part reports, and what nothing has reported"
-        accessory={<StateChip state={verdict} />}
       />
 
       {/* ------------------------------------------------------------ summary */}
@@ -195,8 +200,8 @@ export function AuditScreen(): React.JSX.Element {
         </AppText>
 
         <AppText variant="caption" color={palette.textMuted}>
-          Readings as of {new Date(measuredAtMs).toLocaleTimeString()}. Refresh re-reads each
-          glove's transport state. It does not scan, connect, or command any device.
+          Readings as of {new Date(measuredAtMs).toLocaleTimeString()}. Refresh re-reads transport
+          state only — it does not scan or connect.
         </AppText>
 
         <ActionButton

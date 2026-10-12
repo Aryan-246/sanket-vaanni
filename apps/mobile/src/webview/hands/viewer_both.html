@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Sanket Vaanni — Both Hands (3D)</title>
+  <link rel="stylesheet" href="./viewer.css">
+  <script src="./three.min.js"></script>
+  <script src="./GLTFLoader.js"></script>
+  <script src="./OrbitControls.js"></script>
+  <script>window.SANKET_HAND_SIDE = 'both';</script>
+  <script src="./hand_viewer.js"></script>
+</head>
+<body>
+  <div id="viewport">
+    <div id="loading" data-tone="loading">
+      <div class="spinner"></div>
+      <span id="loading-text">Loading 3D hands…</span>
+    </div>
+    <canvas id="canvas3d"></canvas>
+  </div>
+</body>
+</html>

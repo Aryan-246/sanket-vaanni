@@ -20,5 +20,5 @@ module.exports = {
       env: { jest: true, node: true },
     },
   ],
-  ignorePatterns: ['node_modules/', 'android/', 'ios/', 'coverage/'],
+  ignorePatterns: ['node_modules/', 'android/', 'ios/', 'coverage/', 'src/assets/hands/', 'src/webview/'],
 };

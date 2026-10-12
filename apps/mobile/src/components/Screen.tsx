@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -25,6 +25,14 @@ export interface ScreenProps {
   /** Centre the content and cap its width; for tablet layouts. */
   constrain?: boolean;
   contentContainerStyle?: ViewStyle | ViewStyle[];
+  /**
+   * A bar pinned above the bottom inset, outside the scroll.
+   *
+   * For actions that must stay reachable no matter where the user has scrolled
+   * to — an editor's Save and Discard, above all, since an edit made at the
+   * bottom of a long screen must not require scrolling back to commit.
+   */
+  stickyFooter?: React.ReactNode;
   testID?: string;
 }
 
@@ -46,14 +54,23 @@ export function Screen({
   bottomInset = 0,
   constrain = false,
   contentContainerStyle,
+  stickyFooter,
   testID,
 }: ScreenProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const styles = useStyles(makeStyles);
 
+  /*
+   * The pinned bar floats *over* the scroll, so without this the last row of a
+   * long screen ends up underneath it — reachable only by dragging past the
+   * end, which a ScrollView will not do. Measured rather than guessed, because
+   * the bar's height changes with the button labels and the font scale.
+   */
+  const [footerHeight, setFooterHeight] = useState(0);
+
   const padding = {
     paddingTop: insets.top + spacing.md,
-    paddingBottom: insets.bottom + bottomInset + spacing.xxl,
+    paddingBottom: insets.bottom + bottomInset + spacing.xxl + footerHeight,
   };
 
   if (!scroll) {
@@ -82,6 +99,16 @@ export function Screen({
       >
         {children}
       </ScrollView>
+
+      {stickyFooter !== undefined && (
+        <View
+          style={[styles.stickyFooter, { bottom: bottomInset }]}
+          onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
+          testID="screen-sticky-footer"
+        >
+          {stickyFooter}
+        </View>
+      )}
 
       {/*
         An opaque strip behind the status bar, drawn over the scrolling content.
@@ -128,6 +155,13 @@ const makeStyles = (palette: Palette) =>
     },
     content: {
       paddingHorizontal: layout.screenPadding,
+    },
+    stickyFooter: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      paddingHorizontal: layout.screenPadding,
+      paddingTop: spacing.sm,
     },
     constrained: {
       alignSelf: 'center',

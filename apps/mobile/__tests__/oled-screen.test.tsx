@@ -123,6 +123,18 @@ async function typeInto(
   });
 }
 
+/**
+ * Commits the studio's draft.
+ *
+ * Every edit on this screen is transactional: it moves the working copy that
+ * the preview renders and touches nothing else. Only Save — the pinned bar —
+ * replaces the stored profile. A case that asserts on storage therefore has to
+ * press it, and a case that does not is asserting that nothing was written.
+ */
+async function saveProfile(renderer: ReactTestRenderer.ReactTestRenderer): Promise<void> {
+  await pressByLabel(renderer, 'Save this profile');
+}
+
 /** Flushes the studio's coalesced write to storage. */
 async function flushWrite(ms = 500): Promise<void> {
   await ReactTestRenderer.act(async () => {
@@ -260,6 +272,7 @@ describe('the two panels are configured separately', () => {
     expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
     expect(isSelectedByLabel(renderer, 'Bar')).toBe(false);
 
+    await saveProfile(renderer);
     await flushWrite();
     expect((await storedHand(storage, 0, 'left'))?.layout.loadingStyle).toBe('bar');
     expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('dots');
@@ -278,6 +291,7 @@ describe('the two panels are configured separately', () => {
     await hideStatusRow(renderer);
     expect(offersRestore(renderer)).toBe(true);
 
+    await saveProfile(renderer);
     await flushWrite();
     const left = await storedHand(storage, 0, 'left');
     const right = await storedHand(storage, 0, 'right');
@@ -296,6 +310,7 @@ describe('the two panels are configured separately', () => {
     await openStudio(renderer);
 
     await pressByLabel(renderer, 'Desired: right panel on');
+    await saveProfile(renderer);
     await flushWrite();
 
     expect((await storedHand(storage, 0, 'right'))?.enabled).toBe(true);
@@ -461,13 +476,27 @@ describe('restoring defaults', () => {
     const { renderer } = await renderApp({ skipIntro: true, storage });
     await openStudio(renderer);
 
-    // Customise the right panel, then the left one.
+    // Customise the right panel, then the left one, and save each — so the
+    // *stored* profile is non-default on both hands before the restore.
     await pressByLabel(renderer, 'Bar');
+    await saveProfile(renderer);
     await pressByLabel(renderer, 'Left');
     await pressByLabel(renderer, 'Bar');
+    await saveProfile(renderer);
+
+    await flushWrite();
+    expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('bar');
+    expect((await storedHand(storage, 0, 'left'))?.layout.loadingStyle).toBe('bar');
+
+    // The restore is reached from the right panel, but it applies to both: the
+    // left one is not on screen and must be reset anyway.
+    await pressByLabel(renderer, 'Right');
     await pressByLabel(renderer, "Restore this profile's defaults");
     await pressByLabel(renderer, 'Restore');
 
+    // A restore is a change to the working copy like any other, so it is the
+    // Save that puts it in storage.
+    await saveProfile(renderer);
     await flushWrite();
     expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('dots');
     expect((await storedHand(storage, 0, 'left'))?.layout.loadingStyle).toBe('dots');
@@ -539,6 +568,7 @@ describe('profiles', () => {
     // Customise the default profile…
     await pressByLabel(renderer, 'Bar');
     expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
+    await saveProfile(renderer);
 
     // …then create a second one, which must not inherit the customisation.
     await openProfiles(renderer);
@@ -557,6 +587,7 @@ describe('profiles', () => {
     await openStudio(renderer);
 
     await pressByLabel(renderer, 'Bar');
+    await saveProfile(renderer);
     await openProfiles(renderer);
     await pressByLabel(renderer, 'Create a new profile');
     await typeInto(renderer, 'Profile name', 'Evening class');
@@ -603,6 +634,7 @@ describe('profiles', () => {
     // something to carry. Duplication is offered on the rows that are *not*
     // active, so this has to happen before the second profile is created.
     await pressByLabel(renderer, 'Bar');
+    await saveProfile(renderer);
 
     await openProfiles(renderer);
     await pressByLabel(renderer, 'Create a new profile');
@@ -673,6 +705,280 @@ describe('profiles', () => {
   });
 });
 
+/* ---------------------------------------------------- transactional editing */
+
+/**
+ * The reported defect, as a set of cases.
+ *
+ * The studio used to write through: every tap and keystroke committed the whole
+ * profile and queued a storage write. So closing an editor with the X kept
+ * whatever the user had been experimenting with — an X that saved. These cases
+ * pin the replacement: edits land in a draft the preview renders, storage is
+ * untouched until Save, and every way out of an editor means "undo".
+ */
+describe('unsaved changes are explicit', () => {
+  it('shows an edit in the preview without writing it to storage', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Bar');
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
+
+    await flushWrite();
+    // The preview moved; the stored profile did not.
+    expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('dots');
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('offers Save and Discard only while there is something to commit', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    expect(renderedText(renderer)).not.toContain('Unsaved changes');
+
+    await pressByLabel(renderer, 'Bar');
+    const dirty = renderedText(renderer);
+    expect(dirty).toContain('Unsaved changes');
+    expect(dirty).toContain('is not stored yet');
+
+    await pressByLabel(renderer, 'Discard unsaved changes');
+    expect(renderedText(renderer)).not.toContain('Unsaved changes');
+
+    await teardown(renderer);
+  });
+
+  it('puts the preview back to the saved version when the draft is discarded', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Bar');
+    await pressByLabel(renderer, 'Discard unsaved changes');
+
+    expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(false);
+
+    await flushWrite();
+    expect((await storedHand(storage, 0, 'right'))?.layout.loadingStyle).toBe('dots');
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('commits every edit of the profile in one Save', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Bar');
+    await pressByLabel(renderer, 'Desired: right panel on');
+    await saveProfile(renderer);
+
+    // One save, both edits, and the bar goes away because there is nothing left
+    // to commit.
+    expect(renderedText(renderer)).not.toContain('Unsaved changes');
+
+    await flushWrite();
+    const right = await storedHand(storage, 0, 'right');
+    expect(right?.layout.loadingStyle).toBe('bar');
+    expect(right?.enabled).toBe(true);
+    // The other panel was not swept up in it.
+    expect((await storedHand(storage, 0, 'left'))?.layout.loadingStyle).toBe('dots');
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('does not resurrect an unsaved draft on the next launch', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+
+    const first = await renderApp({ skipIntro: true, storage });
+    await openStudio(first.renderer);
+    await pressByLabel(first.renderer, 'Bar');
+    await flushWrite();
+    await teardown(first.renderer);
+
+    // A restart is a new tree over the same storage. The draft was never
+    // committed, so it must not be there.
+    const second = await renderApp({ skipIntro: true, storage });
+    await openStudio(second.renderer);
+    expect(isSelectedByLabel(second.renderer, 'Dots')).toBe(true);
+
+    await teardown(second.renderer);
+    jest.useRealTimers();
+  });
+});
+
+/* --------------------------------------------------------------- the editor */
+
+describe('the item editor cancels rather than saves', () => {
+  it('undoes the row when the sheet is closed with the X', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Status');
+    await pressByLabel(renderer, 'Show Status on the panel');
+    expect(offersRestore(renderer)).toBe(true);
+
+    await pressByLabel(renderer, 'Close');
+
+    // The hide is undone along with everything else the sheet changed, and
+    // nothing was left behind for Save to commit.
+    expect(offersRestore(renderer)).toBe(false);
+    expect(renderedText(renderer)).not.toContain('Unsaved changes');
+
+    await teardown(renderer);
+  });
+
+  it('routes the Android back button to the same cancellation', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Status');
+    await pressByLabel(renderer, 'Show Status on the panel');
+    expect(offersRestore(renderer)).toBe(true);
+
+    // Back reaches the sheet as `onRequestClose`, exactly as it does on device.
+    const modal = renderer.root.findAllByProps({ transparent: true })[0];
+    if (modal === undefined) throw new Error('No sheet modal is mounted.');
+    await ReactTestRenderer.act(async () => {
+      modal.props.onRequestClose();
+    });
+
+    expect(offersRestore(renderer)).toBe(false);
+
+    await teardown(renderer);
+  });
+
+  it('keeps the row in the draft — still unsaved — when the user presses Done', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Status');
+    await pressByLabel(renderer, 'Show Status on the panel');
+    await pressByLabel(renderer, 'Done');
+
+    // Done means "keep this row's edit", not "save it": the hide is still in
+    // the draft, and the studio says so.
+    expect(offersRestore(renderer)).toBe(true);
+    expect(renderedText(renderer)).toContain('Unsaved changes');
+
+    await flushWrite();
+    expect(
+      (await storedHand(storage, 0, 'right'))?.layout.items.find((item) => item.kind === 'status')
+        ?.visible,
+    ).toBe(true);
+
+    await saveProfile(renderer);
+    await flushWrite();
+    expect(
+      (await storedHand(storage, 0, 'right'))?.layout.items.find((item) => item.kind === 'status')
+        ?.visible,
+    ).toBe(false);
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+
+  it('removes the row for good when Delete is used, rather than restoring it', async () => {
+    jest.useFakeTimers();
+    const storage = createInMemoryStorage();
+    const { renderer } = await renderApp({ skipIntro: true, storage });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Status');
+    await pressByLabel(renderer, 'Delete Status');
+
+    // Deleting closes the sheet. If closing meant "undo", the row would come
+    // straight back — the deletion and the snapshot would cancel out.
+    expect(renderedText(renderer)).not.toContain('1 of 4');
+
+    await saveProfile(renderer);
+    await flushWrite();
+    const items = (await storedHand(storage, 0, 'right'))?.layout.items ?? [];
+    expect(items.some((item) => item.kind === 'status')).toBe(false);
+
+    await teardown(renderer);
+    jest.useRealTimers();
+  });
+});
+
+/* --------------------------------------------------- the discard dialog */
+
+describe('discarding by leaving', () => {
+  it('asks before an action that would drop the draft, and keeps it when declined', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Bar');
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+
+    // Creating a profile moves the active one, which would drop the draft, so it
+    // does not happen until the user has answered.
+    expect(renderedText(renderer)).toContain('Discard unsaved changes?');
+    await pressByLabel(renderer, 'Keep editing');
+
+    const kept = renderedText(renderer);
+    expect(kept).not.toContain('Discard unsaved changes?');
+    // Still the original profile, still holding the edit.
+    expect(isSelectedByLabel(renderer, 'Bar')).toBe(true);
+    expect(kept).toContain('1 of 8');
+
+    await teardown(renderer);
+  });
+
+  it('carries out the deferred action once the user discards', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+
+    await pressByLabel(renderer, 'Bar');
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+    expect(renderedText(renderer)).toContain('Discard unsaved changes?');
+
+    await pressByLabel(renderer, 'Discard changes');
+
+    // The action that was held back — creating a profile — now happens.
+    expect(renderedText(renderer)).toContain('New profile');
+    await typeInto(renderer, 'Profile name', 'Evening class');
+    await pressByLabel(renderer, 'Save profile');
+
+    const output = renderedText(renderer);
+    expect(output).toContain('Evening class');
+    expect(output).toContain('2 of 8');
+    // The new profile starts from the defaults, and the draft that was thrown
+    // away did not come with it.
+    expect(isSelectedByLabel(renderer, 'Dots')).toBe(true);
+
+    await teardown(renderer);
+  });
+
+  it('does not ask at all when there is nothing unsaved', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openStudio(renderer);
+    await openProfiles(renderer);
+    await pressByLabel(renderer, 'Create a new profile');
+
+    const output = renderedText(renderer);
+    expect(output).not.toContain('Discard unsaved changes?');
+    // Straight to the name, with no warning in between.
+    expect(output).toContain('New profile');
+    expect(output).toContain('Profile name');
+
+    await teardown(renderer);
+  });
+});
+
 /* ------------------------------------------------------------- persistence */
 
 describe('what reaches storage', () => {
@@ -683,6 +989,7 @@ describe('what reaches storage', () => {
     const { renderer } = await renderApp({ skipIntro: true, storage });
     await openStudio(renderer);
     await hideStatusRow(renderer);
+    await saveProfile(renderer);
     await flushWrite();
 
     const stored = await storedProfiles(storage);
@@ -710,6 +1017,7 @@ describe('what reaches storage', () => {
     await typeInto(first.renderer, 'Profile name', 'Evening class');
     await pressByLabel(first.renderer, 'Save profile');
     await pressByLabel(first.renderer, 'Bar');
+    await saveProfile(first.renderer);
     await flushWrite();
     await teardown(first.renderer);
 

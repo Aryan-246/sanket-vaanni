@@ -88,10 +88,23 @@ export function RecognitionPanel({
           {OUTCOME_HEADLINE_SHORT[outcome.kind]}
         </AppText>
 
+        {/*
+          The display size belongs to a *result*.
+
+          `result` is 30/38/700 — the size chosen so a recognised phrase can be
+          read at arm's length across a table, which is the whole point of this
+          panel. Applying it to a state word as well made "Not implemented" the
+          largest thing on the Dashboard: the loudest text in the app said that
+          nothing works, and it pushed the actual hand viewer further down the
+          screen. A placeholder is a caption in the layout's terms, not a
+          headline, so it is set as one — `title` for states the user can act on
+          (waiting, blocked, no match) and `heading` for the build-level caveat,
+          which is information rather than a call to action.
+        */}
         <AppText
-          variant="result"
+          variant={headlineVariant(outcome, candidate !== null)}
           color={headlineColor(outcome, palette)}
-          style={styles.headline}
+          style={candidate !== null ? styles.headline : undefined}
           numberOfLines={3}
         >
           {candidate ?? shortState(outcome)}
@@ -190,6 +203,21 @@ function headlineColor(outcome: RecognitionOutcome, palette: Palette): string {
   }
 }
 
+/**
+ * How large the panel's one line should be.
+ *
+ * `hasCandidate` is passed rather than derived from `outcome.kind` so the size
+ * follows the thing actually being rendered: a real recognised phrase gets the
+ * reading size even if the outcome is still being classified as uncertain.
+ */
+function headlineVariant(
+  outcome: RecognitionOutcome,
+  hasCandidate: boolean,
+): 'result' | 'title' | 'heading' {
+  if (hasCandidate) return 'result';
+  return outcome.kind === 'unavailable' ? 'heading' : 'title';
+}
+
 /** How the recogniser is being fed, in three words. */
 function inputSummary(plan: InputPlan): string {
   if (plan.kind === 'blocked') return 'no input';
@@ -243,7 +271,15 @@ const makeStyles = (palette: Palette) =>
     stage: {
       gap: spacing.xs,
       paddingVertical: spacing.sm,
-      minHeight: 96,
+      /*
+       * Enough to hold either shape this stage takes, so the card does not jump
+       * when a result arrives: caption + label + hand line for a placeholder, or
+       * caption + the 38 pt reading line for a result. It was 96 when the
+       * placeholder was drawn at the reading size too; with the placeholder back
+       * at heading size, 80 is what the content actually needs and the other 16
+       * points were an empty band on a screen that has a hand viewer below it.
+       */
+      minHeight: 80,
       justifyContent: 'center',
     },
     headline: {

@@ -85,12 +85,28 @@ export function LanguageSelector({
               ]}
             >
               <View style={styles.rowText}>
+                {/*
+                  The Latin name gets its own line.
+
+                  It used to share one with the native name —
+                  `Indian Sign Language  ·  भारतीय सांकेतिक भाषा` — which is
+                  about 360 points of text in a row that has roughly 250. Both
+                  lines are `numberOfLines={1}`, so the tail was cut, and the
+                  tail was the native name: the one thing this column exists to
+                  show, lost to an ellipsis in the script it was written in
+                  for. With the name alone on the line it always fits.
+                */}
                 <AppText variant="body" numberOfLines={1}>
                   {option.label}
-                  {option.native !== null ? `  ·  ${option.native}` : ''}
                 </AppText>
+                {/*
+                  Native name first, then the state. If this line does run out
+                  of room the detail is what gives, not the language's own name
+                  — and the row's accessibility label still carries both in
+                  full for anyone not reading the pixels.
+                */}
                 <AppText variant="caption" color={palette.textMuted} numberOfLines={1}>
-                  {option.detail}
+                  {option.native !== null ? `${option.native} · ${option.detail}` : option.detail}
                 </AppText>
               </View>
 

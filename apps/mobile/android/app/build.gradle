@@ -117,3 +117,40 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+/**
+ * The WebView hand assets, packaged straight from where they are written.
+ *
+ * The viewer loads its HTML, scripts and models over `file:///android_asset/`,
+ * so those files have to end up inside the APK's assets under a `hands/` prefix.
+ * There is no copy step: `src/webview` is registered as an additional assets
+ * source, and because it contains a `hands/` directory, its contents land at
+ * exactly `assets/hands/...` — the path the viewer already asks for.
+ *
+ * ## Why the assets live outside `src/assets`
+ *
+ * `src/assets` holds what `require()` pulls in — the intro video and its poster,
+ * which React Native's own asset pipeline packages. Registering that directory
+ * would have swept those two files into the assets tree a second time, adding
+ * their 2.6 MB to the APK for nothing. An `exclude("intro/**")` on the assets
+ * source set did not take effect through the Android plugin, so the split is
+ * made by directory instead: one directory, one packaging route, nothing to
+ * filter.
+ *
+ * ## Why there is no sync task any more
+ *
+ * There used to be one, copying `src/assets/hands` into
+ * `android/app/src/main/assets/hands` on every build. It existed to stop the two
+ * copies drifting, which they had: the installed app was running different HTML
+ * from the file being edited, so a fix could land in the repository and change
+ * nothing on the device.
+ *
+ * The task solved the drift but created a worse problem. It wrote into
+ * `src/main/assets`, which is a *source* directory, so that directory became
+ * something an unrelated task mutates — and Gradle 9 rejects that, because the
+ * tasks that read it have no declared dependency on whatever filled it. Staging
+ * the copy in the build directory and registering it as a source is the modern
+ * way to do this, but the variant API refuses a plain task's `Provider` as a
+ * source directory. Removing the copy removes the question entirely.
+ */
+android.sourceSets.main.assets.srcDir("$rootDir/../src/webview")

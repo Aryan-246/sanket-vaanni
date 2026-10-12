@@ -13,7 +13,7 @@ import { FINGERS } from '../sensors/types';
 import type { GloveSide } from '../ble/types';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
-import { motion, radii, spacing } from '../theme';
+import { MIN_TOUCH_TARGET, motion, radii, spacing } from '../theme';
 
 export interface FingerReadingsProps {
   gloves: Readonly<Record<GloveSide, GloveSnapshot>>;
@@ -100,8 +100,7 @@ export function FingerReadings({
         <View style={styles.body}>
           {reporting.length === 0 ? (
             <AppText variant="caption" color={palette.textMuted}>
-              No glove is sending data, so there are no finger values to show. Nothing here
-              is estimated for a hand that is not connected.
+              Nothing here is estimated for a hand that is not connected.
             </AppText>
           ) : (
             reporting.map((side) => (
@@ -213,7 +212,9 @@ const makeStyles = (palette: Palette) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.md,
-      minHeight: 44,
+      // The whole header is the disclosure control, so it meets the app's own
+      // touch floor rather than stopping 4 dp short of it.
+      minHeight: MIN_TOUCH_TARGET,
     },
     headerText: {
       flex: 1,

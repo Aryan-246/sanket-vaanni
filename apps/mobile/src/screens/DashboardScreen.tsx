@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { ActionButton } from '../components/ActionButton';
 import { AppText } from '../components/AppText';
+import { DiagnosticsCard } from '../components/DiagnosticsCard';
 import { FingerReadings } from '../components/FingerReadings';
 import { GloveConnectionBar } from '../components/GloveConnectionBar';
 import { HandViewer } from '../components/HandViewer';
@@ -22,7 +23,7 @@ import {
 import { findOutputLanguage } from '../app/preferences';
 import { deviceDisplayName } from '../ble/link';
 import type { DiscoveredGlove, GloveSide } from '../ble/types';
-import { HAND_ASSET_BLOCKER, HAND_ASSET_FINDINGS, HAND_ASSET_ROUTE } from '../hands/viewer';
+import { ACTIVE_HAND_ASSET, HAND_ASSET_FINDINGS, HAND_ASSET_ROUTE } from '../hands/viewer';
 import { evaluateTranslation } from '../translation';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
@@ -179,7 +180,7 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
       : [];
 
   return (
-    <Screen scroll bottomInset={layout.tabBarHeight} testID="dashboard-screen">
+    <Screen scroll bottomInset={layout.tabBarHeight + spacing.xl} testID="dashboard-screen">
       <ScreenHeader
         title="Dashboard"
         subtitle={`${profile.name} → ${language?.name ?? preferences.targetLanguageCode}`}
@@ -238,6 +239,14 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
         onChangeSignProfile={(id) => updatePreferences({ signProfileId: id })}
         onChangeTargetLanguage={(code) => updatePreferences({ targetLanguageCode: code })}
         testID="translator-panel"
+      />
+
+      {/* 7 — Diagnostics & 3D Rig Status (Collapsible for engineers and evaluators) */}
+      <DiagnosticsCard
+        gloves={gloves}
+        outcome={outcome}
+        live={live}
+        testID="diagnostics-card"
       />
 
       {/*
@@ -401,25 +410,55 @@ function HandViewerSheet({
       visible={visible}
       onClose={onClose}
       title="About the hand viewer"
-      description="What this is, and what the 3D version is waiting on."
+      description="Real-time 3D VR Hands rig and articulated figure."
       footer={<ActionButton label="Close" onPress={onClose} accessibilityLabel="Close" />}
     >
       <View style={styles.sheetBody}>
         <AppText variant="body" color={palette.textSecondary}>
-          You are looking at an articulated figure: fifteen finger segments positioned by
-          forward kinematics from the measured bend of each finger. Bend a finger and the
-          figure's finger bends by the amount the sensor reported. It is not a 3D model.
+          The viewer draws a rigged hand model that is bundled inside the app, so it needs no
+          network and no glove to appear. Finger bend and wrist tilt are applied to the model's
+          bones directly; the model itself is not animated by a stored clip.
         </AppText>
 
-        <View style={[styles.notice, { backgroundColor: palette.warningSurface }]}>
-          <Icon name="warning" size={14} color={palette.warning} />
-          <AppText variant="caption" color={palette.warning} style={styles.noticeText}>
-            {HAND_ASSET_BLOCKER}
-          </AppText>
-        </View>
+        {/*
+          Two lists, not one. These used to be a single "Active 3D Asset" block that mixed
+          figures measured from the bundled model with the author, licence and geometry of a
+          *different* model — a reference asset that was declined and is not in the app. Read
+          together they said the shipped rig was authored by someone who did not author it, was
+          not downloadable (it is in the APK), and had no animations (it has one).
+        */}
+        <AppText variant="overline" overline color={palette.textMuted} style={styles.sheetGap}>
+          The model in this build
+        </AppText>
+        <Detail label="Files" value={ACTIVE_HAND_ASSET.fileNames} />
+        <Detail
+          label="Geometry"
+          value={`${ACTIVE_HAND_ASSET.triangles.toLocaleString()} triangles · ${ACTIVE_HAND_ASSET.vertices.toLocaleString()} vertices`}
+        />
+        <Detail label="Texture" value={ACTIVE_HAND_ASSET.texture} />
+        <Detail
+          label="Rig"
+          value={`${ACTIVE_HAND_ASSET.joints} bones · ${ACTIVE_HAND_ASSET.chains}`}
+        />
+        <Detail
+          label="Animation"
+          value={`${ACTIVE_HAND_ASSET.animationClips} bundled clip (${ACTIVE_HAND_ASSET.animationName}), not played back`}
+        />
+        <Detail
+          label="Renderer"
+          value={`three.js r${ACTIVE_HAND_ASSET.threeRevision} in an Android WebView`}
+        />
+        <Detail
+          label="Size"
+          value={`${Math.round(ACTIVE_HAND_ASSET.fileBytes / 1024)} KB per hand`}
+        />
 
         <AppText variant="overline" overline color={palette.textMuted} style={styles.sheetGap}>
-          The reference model
+          The reference model that was declined
+        </AppText>
+        <AppText variant="caption" color={palette.textMuted} style={styles.sheetNote}>
+          Recorded from Sketchfab's API on 10 October 2026. It is not in this app and nothing on
+          this screen draws it — it is here because it is why the bundled model was used instead.
         </AppText>
         <Detail label="Author" value={HAND_ASSET_FINDINGS.author} />
         <Detail
@@ -570,6 +609,11 @@ const makeStyles = (palette: Palette) =>
     sheetGap: {
       marginTop: spacing.lg,
     },
+    // Sits under a section eyebrow and explains it, so it takes the same gap
+    // the eyebrow itself does rather than the sheet body's.
+    sheetNote: {
+      marginTop: -spacing.xs,
+    },
     notice: {
       flexDirection: 'row',
       alignItems: 'flex-start',
@@ -586,7 +630,14 @@ const makeStyles = (palette: Palette) =>
       alignItems: 'flex-start',
     },
     detailLabel: {
-      width: 92,
+      /*
+       * A floor, not a width. It aligns the label column down the sheet, and at
+       * 1× no label reaches 92. Under 1.4× font scaling "Downloadable" needs
+       * about 116, and a fixed 92 clipped it — in a row whose whole job is to
+       * name the field. The value column is `flex: 1`, so it gives up the
+       * difference.
+       */
+      minWidth: 92,
     },
     detailValue: {
       flex: 1,

@@ -19,6 +19,12 @@ export interface VoicePanelProps {
   unavailableReason: string | null;
   /** Text that would be spoken, or null when nothing has been recognised. */
   phrase: string | null;
+  /**
+   * Draw the panel's own "Voice" heading. Set false when the caller already
+   * renders a `SectionHeader` for this section, so the word is not printed
+   * twice. The status badge is drawn either way.
+   */
+  showTitle?: boolean;
   testID?: string;
 }
 
@@ -54,6 +60,7 @@ export function VoicePanel({
   available,
   unavailableReason,
   phrase,
+  showTitle = true,
   testID,
 }: VoicePanelProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
@@ -63,16 +70,25 @@ export function VoicePanel({
 
   return (
     <Card testID={testID} style={styles.card}>
-      <View style={styles.headerRow}>
-        <AppText variant="overline" overline color={palette.textMuted}>
-          Voice
-        </AppText>
-        <Badge
-          label={!enabled ? 'Off' : blocked ? 'Unavailable' : 'Ready'}
-          tone={!enabled ? 'neutral' : blocked ? 'warning' : 'success'}
-          dot
-        />
-      </View>
+      {/*
+        The panel titles itself on the Dashboard, where it is the whole of that
+        subject. On a settings screen it sits under a `SectionHeader` that
+        already says "Voice", and drawing the word twice thirty points apart is
+        the duplication this flag removes. The badge stays in both cases: it is
+        the state, not the label.
+      */}
+      {showTitle ? (
+        <View style={styles.headerRow}>
+          <AppText variant="overline" overline color={palette.textMuted}>
+            Voice
+          </AppText>
+          <VoiceStatusBadge enabled={enabled} blocked={blocked} />
+        </View>
+      ) : (
+        <View style={styles.headerRowEnd}>
+          <VoiceStatusBadge enabled={enabled} blocked={blocked} />
+        </View>
+      )}
 
       <View style={styles.toggleRow}>
         <View style={styles.toggleText}>
@@ -133,6 +149,24 @@ export function VoicePanel({
   );
 }
 
+/**
+ * The one place the panel's state is worded.
+ *
+ * Extracted so the badge that says `Off` / `Unavailable` / `Ready` is defined
+ * once and cannot drift between the two layouts the panel is drawn in.
+ */
+function VoiceStatusBadge({
+  enabled,
+  blocked,
+}: {
+  enabled: boolean;
+  blocked: boolean;
+}): React.JSX.Element {
+  if (!enabled) return <Badge label="Off" tone="neutral" dot />;
+  if (blocked) return <Badge label="Unavailable" tone="warning" dot />;
+  return <Badge label="Ready" tone="success" dot />;
+}
+
 const makeStyles = (palette: Palette) =>
   StyleSheet.create({
     card: {
@@ -142,6 +176,15 @@ const makeStyles = (palette: Palette) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
+    // With the panel's own heading suppressed there is only the badge left, and
+    // it still belongs on the right, where it sits under the section header's
+    // own right edge.
+    headerRowEnd: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
       gap: spacing.sm,
     },
     toggleRow: {

@@ -16,6 +16,33 @@ jest.mock('react-native-video', () => {
   };
 });
 
+/**
+ * The WebView is a native view. It is mocked with a working
+ * `injectJavaScript`, counted rather than ignored, because the number of
+ * messages sent across that bridge is a performance property this project
+ * measures — and a mock that dropped them would make the count untestable.
+ */
+jest.mock('react-native-webview', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const injected = [];
+  const Mock = React.forwardRef((props, ref) => {
+    React.useImperativeHandle(
+      ref,
+      () => ({ injectJavaScript: (script) => injected.push(script) }),
+      [],
+    );
+    return React.createElement(View, { ...props, ref });
+  });
+  return {
+    __esModule: true,
+    WebView: Mock,
+    default: Mock,
+    /** Every script a `HandModel3D` has sent, in order. */
+    __injected: injected,
+  };
+});
+
 // react-native-safe-area-context ships an official jest mock, but exposes it
 // as a **default** export — so its named exports (useSafeAreaInsets, …) have to
 // be lifted back onto the module for the component imports to resolve.

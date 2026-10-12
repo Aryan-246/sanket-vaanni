@@ -119,7 +119,14 @@ const makeStyles = (palette: Palette) =>
       borderWidth: 1,
     },
     compact: {
-      minHeight: 36,
+      /*
+       * 44, not 36. "Compact" is about how much room the button takes, not how
+       * small a target it offers — at 36 dp the sheet-row actions (Rename,
+       * Duplicate, Re-check, Connect) were under the 44 dp a fingertip needs,
+       * and under this app's own `MIN_TOUCH_TARGET`. The padding is what makes
+       * it compact; the height meets the floor.
+       */
+      minHeight: MIN_TOUCH_TARGET - 4,
       paddingHorizontal: spacing.md,
       paddingVertical: spacing.xs,
     },

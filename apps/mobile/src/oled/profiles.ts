@@ -166,6 +166,48 @@ export function copyProfile(profile: OledProfile): OledProfile {
   };
 }
 
+/**
+ * Fields that are the studio's own bookkeeping rather than the user's settings.
+ *
+ * `updatedAtMs` moves on every edit, so counting it would report a draft as
+ * unsaved after the user changed a setting and changed it straight back — a
+ * change that is not one, and one they would be asked to save.
+ */
+const NOT_A_SETTING = new Set(['updatedAtMs']);
+
+/**
+ * Whether two values hold the same settings.
+ *
+ * Compared by value rather than by reference, because this is the question the
+ * studio asks to decide whether there is anything to save — and undoing an edit
+ * produces a *new* object holding the old values, which an identity check would
+ * report as a change.
+ *
+ * Structural rather than field-by-field on purpose: a field added to an item
+ * later is then covered automatically, where a hand-written comparison would
+ * have to be remembered, and forgetting would leave an edit the user could not
+ * save.
+ */
+export function sameSettings(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    return a.length === b.length && a.every((value, index) => sameSettings(value, b[index]));
+  }
+
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left).filter((key) => !NOT_A_SETTING.has(key));
+
+  if (keys.length !== Object.keys(right).filter((key) => !NOT_A_SETTING.has(key)).length) {
+    return false;
+  }
+  return keys.every((key) => sameSettings(left[key], right[key]));
+}
+
 /* ------------------------------------------------------------ validation ---- */
 
 /**

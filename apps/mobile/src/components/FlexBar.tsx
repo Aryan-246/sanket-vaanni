@@ -129,7 +129,15 @@ const makeStyles = (palette: Palette) =>
       paddingVertical: spacing.sm,
     },
     label: {
-      width: 52,
+      /*
+       * A minimum, not a width. The column exists to line the bars up, and at 1×
+       * every finger name is narrower than 52 so this renders identically. Under
+       * the app's 1.4× font-scaling cap "Middle" needs about 58 points, and a
+       * fixed 52 with `numberOfLines={1}` truncated it to "Mid…" — the label for
+       * a finger, lost to an ellipsis. `minWidth` lets the box grow instead, and
+       * the track beside it is `flex: 1`, so it takes the difference.
+       */
+      minWidth: 52,
       color: palette.textSecondary,
     },
     track: {
@@ -152,7 +160,9 @@ const makeStyles = (palette: Palette) =>
       transformOrigin: 'left',
     },
     values: {
-      width: 92,
+      // Same reasoning as `label`: a floor that keeps the numbers right-aligned
+      // across fingers, not a ceiling that clips "raw 99.99" at 1.4×.
+      minWidth: 92,
       alignItems: 'flex-end',
       gap: 1,
     },

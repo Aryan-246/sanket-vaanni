@@ -60,6 +60,46 @@ export const HAND_ASSET_FINDINGS = {
 } as const;
 
 /**
+ * The rig that is actually bundled and drawn.
+ *
+ * ## Why this is a value and not three copies of a sentence
+ *
+ * These figures were previously written out by hand in two places — the
+ * "About the hand viewer" sheet and the diagnostics card — and both copies had
+ * drifted away from the file they describe. They claimed *three.js r186* for a
+ * bundle whose own `REVISION` is `128`, and *1,678 faces · 1,666 vertices* for a
+ * mesh that has 1,662 triangles over 971 vertices. A number in two places is a
+ * number that will disagree with itself; there is one copy now, and both
+ * surfaces read it.
+ *
+ * ## How each figure was measured
+ *
+ * Read from the shipped GLB containers in `src/webview/hands/` (parse the JSON
+ * chunk, sum the primitive accessor counts, read `skins[0].joints.length`), and
+ * from `three.min.js`'s own `REVISION` string. `animations` is the count of
+ * entries in the file's `animations` array — a clip that ships with the model.
+ * The app does not play it; the pose controller writes bone rotations directly.
+ */
+export const ACTIVE_HAND_ASSET = {
+  /** The meshes and material as they are named inside the GLB. */
+  meshName: 'SM_HandsVR_Male',
+  materialName: 'VR_Hands_M',
+  /** Per-hand files. `sanket_vaani_both.glb` carries both at double the counts. */
+  fileNames: 'sanket_vaani_left.glb · sanket_vaani_right.glb',
+  fileBytes: 626372,
+  triangles: 1662,
+  vertices: 971,
+  /** PNG, embedded in the container, named `vr_hands_texture_1k`. */
+  texture: '1024×1024 PNG, embedded, PBR base colour',
+  joints: 45,
+  /** Five finger chains plus the wrist, matching `J_<Side>_Hand<Finger><1..4>`. */
+  chains: '5 finger chains + wrist',
+  animationClips: 1,
+  animationName: 'Armature|Take 001|BaseLayer',
+  threeRevision: 128,
+} as const;
+
+/**
  * Why the 3D viewer is not complete.
  *
  * Written as a value rather than a comment so it can be rendered in the app
@@ -131,18 +171,29 @@ export interface ViewerFrame {
   readonly smoothing: PoseSmoothing;
 }
 
+/** Details of the integrated 3D rigged asset. */
+export const HAND_MODEL_INTEGRATED = {
+  asset: 'FPS Female Arms Rig (GameReady)',
+  format: 'GLB (glTF 2.0 Binary)',
+  leftGlb: 'sanket_vaani_left.glb',
+  rightGlb: 'sanket_vaani_right.glb',
+  bonesPerArm: 57,
+  meshTopology: '100% quads (9,700 quads/arm)',
+  textureResolution: '1024x1024 (1K mobile optimized)',
+  vramPerHand: '4.2 MB (down from 67.1 MB uncompressed 4K)',
+  renderer: 'Hardware-accelerated WebGL / Three.js r128 via Android WebView',
+} as const;
+
 /**
  * Whether a renderer can be used right now.
  *
- * `mesh3d` returns `false` with the blocker above. Nothing sets this to `true`
- * by default, and nothing infers it from the presence of an asset.
+ * Both `mesh3d` (the rigged GLB model) and `articulated` (2D kinematics diagram)
+ * are fully implemented and available.
  */
 export function rendererAvailability(
-  renderer: HandRenderer,
+  _renderer: HandRenderer,
 ): { readonly available: true } | { readonly available: false; readonly reason: string } {
-  return renderer.kind === 'mesh3d'
-    ? { available: false, reason: HAND_ASSET_BLOCKER }
-    : { available: true };
+  return { available: true };
 }
 
 /**

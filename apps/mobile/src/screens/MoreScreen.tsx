@@ -115,7 +115,7 @@ export function MoreScreen({
       <Card style={styles.group}>
         <ListRow
           label="Replay intro"
-          description="Plays the launch sequence again from the start. It also plays automatically on the next cold start."
+          description="Plays the launch sequence again. It also plays on every cold start."
           icon="refresh"
           onPress={onReplayIntro}
           last
@@ -145,17 +145,17 @@ export function MoreScreen({
         <ListRow
           label="App language"
           value="English"
-          description="The interface is written in English. No other language pack exists yet, so there is nothing to switch between."
+          description="No other language pack exists yet, so there is nothing to switch between."
         />
         <ListRow
           label="Text size"
           value="Follows system"
-          description="The interface uses your phone's font size setting. There is no in-app override, so a large system font enlarges every screen."
+          description="Uses your phone's font size setting. There is no in-app override."
         />
         <ListRow
           label="Reduce motion"
           value="Follows system"
-          description="When your phone asks for reduced motion, the launch sequence is skipped and animated indicators hold still."
+          description="Skips the launch sequence when your phone asks for reduced motion."
           last
         />
       </Card>
@@ -169,7 +169,7 @@ export function MoreScreen({
           value={profile.name}
           description={
             profile.vocabularySize === 0
-              ? 'Selected profile. No vocabulary is defined for it yet.'
+              ? 'Selected profile — no vocabulary defined for it yet.'
               : `${profile.vocabularySize} signs in this profile.`
           }
           icon="hand"
@@ -181,17 +181,22 @@ export function MoreScreen({
           description={
             language?.speechWired === true
               ? 'A voice is wired up for this language.'
-              : 'No speech engine is wired up for this language.'
+              : 'No speech engine for this language yet.'
           }
           icon="volume"
           onPress={() => setSheet('translation')}
           last
         />
       </Card>
+      {/*
+        One line, not four. This used to explain the relationship at length and
+        then repeat the vocabulary gap the two rows above already state. What is
+        left is the part a user cannot infer from the rows: that the two settings
+        are independent, so choosing one does not imply the other.
+      */}
       <AppText variant="caption" color={palette.textMuted}>
-        These are two independent settings. The input profile decides which signs would be read;
-        the output language decides how the result is written and spoken. Neither has a vocabulary
-        or a model behind it yet.
+        These are two independent settings — the profile decides which signs would be read, the
+        language decides how the result is written.
       </AppText>
 
       {/* ----------------------------------------------------------- voice */}
@@ -203,6 +208,7 @@ export function MoreScreen({
         available={speaker.isAvailable}
         unavailableReason={speaker.unavailableReason}
         phrase={null}
+        showTitle={false}
         testID="more-voice-panel"
       />
 
@@ -214,7 +220,7 @@ export function MoreScreen({
           <ListRow
             label="OLED layout"
             value="OLED Studio"
-            description="Which lines each glove's panel would show, their order and size, the loading indicator, and the startup view."
+            description="Line layout, order, size and startup view for each glove's panel."
             icon="oled"
             onPress={onOpenOled}
             last={onOpenAudit === undefined}
@@ -224,7 +230,7 @@ export function MoreScreen({
           <ListRow
             label="Component status"
             value="Audit"
-            description="What each part reports, and what nothing has reported — the Bluetooth transport, the recognition model, translation and the OLED command set."
+            description="What each part reports, and what nothing has reported."
             icon="audit"
             onPress={onOpenAudit}
             last
@@ -248,9 +254,7 @@ export function MoreScreen({
         <Icon name="info" size={14} color={palette.textMuted} />
         <AppText variant="caption" color={palette.textMuted} style={styles.noteText}>
           Every preference here lives in this device's local storage and is removed when the app's
-          data is cleared. Nothing on this screen is uploaded anywhere. Readings marked Simulated
-          come from the built-in demo transport, which exists so the interface could be built and
-          reviewed before hardware arrived.
+          data is cleared. Nothing on this screen is uploaded anywhere.
         </AppText>
       </Card>
 

@@ -59,6 +59,11 @@ ml/runs/
 *.tflite
 *.h5
 
+# ---- 3D reference archives & evaluation debris (not source) -------------
+design-reference/*.zip
+design-reference/extracted/
+design-reference/evaluation_output/
+
 # ---- OS / editor --------------------------------------------------------
 .DS_Store
 Thumbs.db

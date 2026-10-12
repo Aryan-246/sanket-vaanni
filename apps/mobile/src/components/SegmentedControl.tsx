@@ -88,7 +88,15 @@ const makeStyles = (palette: Palette) =>
     },
     segment: {
       flex: 1,
-      minHeight: MIN_TOUCH_TARGET - 12,
+      /*
+       * 44, not `MIN_TOUCH_TARGET - 12`. The segment is the thing the user
+       * actually taps; the 3 pt of track padding around it is not part of the
+       * target, so a 36 pt segment left the control under the 44 pt a fingertip
+       * needs even though the track looked deep enough. The selected segment is
+       * still marked by surface *and* label weight, so this changes reach, not
+       * legibility.
+       */
+      minHeight: MIN_TOUCH_TARGET - 4,
       alignItems: 'center',
       justifyContent: 'center',
       paddingHorizontal: spacing.sm,

@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
   useWindowDimensions,
@@ -59,6 +60,32 @@ export function Sheet({
   const [mounted, setMounted] = useState(visible);
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
 
+  // Whether the body is taller than the space it was given. Only then do the
+  // separators appear — a hairline under a header that has nothing scrolling
+  // beneath it is noise.
+  const [bodyHeight, setBodyHeight] = useState(0);
+  const [contentHeight, setContentHeight] = useState(0);
+  const scrollable = contentHeight > bodyHeight + 1;
+
+  /**
+   * The tallest the sheet may be.
+   *
+   * 88% of the screen, but never so tall that it runs under the status bar on a
+   * short screen: the sheet is bottom-anchored, so the top is what collides
+   * first.
+   */
+  const maxSheetHeight = useMemo(
+    () => Math.min(height * 0.88, height - insets.top - spacing.lg),
+    [height, insets.top],
+  );
+
+  // A fresh document gets a fresh scroll position, so the next sheet never
+  // opens halfway down.
+  useEffect(() => {
+    setBodyHeight(0);
+    setContentHeight(0);
+  }, [visible]);
+
   useEffect(() => {
     if (visible) {
       setMounted(true);
@@ -108,9 +135,11 @@ export function Sheet({
         </Animated.View>
 
         <Animated.View
+          testID="sheet-panel"
           style={[
             styles.sheet,
             {
+              maxHeight: maxSheetHeight,
               paddingBottom: insets.bottom + spacing.lg,
               transform: [
                 {
@@ -125,7 +154,7 @@ export function Sheet({
         >
           <View style={styles.grabber} />
 
-          <View style={styles.header}>
+          <View style={[styles.header, scrollable && styles.headerScrolled]}>
             <View style={styles.headerText}>
               <AppText variant="heading">{title}</AppText>
               {description !== undefined && (
@@ -148,8 +177,29 @@ export function Sheet({
             )}
           </View>
 
-          {children !== undefined && <View style={styles.body}>{children}</View>}
-          {footer !== undefined && <View style={styles.footer}>{footer}</View>}
+          {children !== undefined && (
+            // The body is the only part that grows without bound, so it is the
+            // only part that scrolls. `flexShrink` lets it give up height to
+            // the header and footer, which stay pinned and reachable.
+            <ScrollView
+              style={styles.bodyScroll}
+              contentContainerStyle={styles.body}
+              onLayout={(event) => setBodyHeight(event.nativeEvent.layout.height)}
+              onContentSizeChange={(_width, contentHeight_) => setContentHeight(contentHeight_)}
+              // Keeps taps on controls inside the sheet working while a
+              // keyboard is open, instead of being swallowed as a dismiss.
+              keyboardShouldPersistTaps="handled"
+              // Lets a drag that starts on a nested horizontal chip list still
+              // scroll this vertical body on Android.
+              nestedScrollEnabled
+              overScrollMode="never"
+            >
+              {children}
+            </ScrollView>
+          )}
+          {footer !== undefined && (
+            <View style={[styles.footer, scrollable && styles.footerScrolled]}>{footer}</View>
+          )}
         </Animated.View>
       </View>
     </Modal>
@@ -174,7 +224,7 @@ const makeStyles = (palette: Palette) =>
       borderColor: palette.border,
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.sm,
-      maxHeight: '88%',
+      // `maxHeight` is set at render time so it can account for the safe area.
     },
     grabber: {
       alignSelf: 'center',
@@ -189,6 +239,13 @@ const makeStyles = (palette: Palette) =>
       alignItems: 'flex-start',
       gap: spacing.md,
       marginBottom: spacing.md,
+    },
+    // Only when something is scrolling underneath: the hairline tells the user
+    // the content continues rather than being cut off.
+    headerScrolled: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.border,
+      paddingBottom: spacing.md,
     },
     headerText: {
       flex: 1,
@@ -208,11 +265,22 @@ const makeStyles = (palette: Palette) =>
     pressed: {
       opacity: 0.6,
     },
+    bodyScroll: {
+      // Shrinks only when the content would otherwise overflow, so a short
+      // sheet still hugs its content instead of filling the screen.
+      flexShrink: 1,
+    },
     body: {
       gap: spacing.xs,
+      paddingBottom: spacing.xs,
     },
     footer: {
       marginTop: spacing.lg,
       gap: spacing.sm,
+    },
+    footerScrolled: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: palette.border,
+      paddingTop: spacing.md,
     },
   });

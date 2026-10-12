@@ -530,11 +530,20 @@ describe('the Dashboard as a whole', () => {
     await teardown(renderer);
   });
 
-  it('says the hand figure is driven by flex measurements, not by a 3D model', async () => {
+  it('names the renderer truthfully and never denies being a 3D model', async () => {
+    // This assertion previously pinned the caption
+    // 'Driven by measured flex, not a 3D model'. In the default (3D) mode that
+    // caption was rendered directly above a real 3D rigged model, so it denied
+    // the thing the user was looking at, and the one-line limit clipped it.
+    //
+    // The subtitle's job is to say which renderer is on screen. The data source
+    // — live glove, simulator, or nothing — is stated separately by the per-hand
+    // badge and the wrist row, so this caption must not imply one.
     const { renderer } = await renderApp({ skipIntro: true });
     const output = renderedText(renderer);
 
-    expect(output).toContain('Driven by measured flex, not a 3D model');
+    expect(output).toContain('3D rig');
+    expect(output).not.toContain('not a 3D model');
 
     await teardown(renderer);
   });

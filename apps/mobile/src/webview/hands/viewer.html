@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Sanket Vaanni — 3D Hand</title>
+  <link rel="stylesheet" href="./viewer.css">
+  <script src="./three.min.js"></script>
+  <script src="./GLTFLoader.js"></script>
+  <script src="./OrbitControls.js"></script>
+  <!--
+    Side comes from ?side=left|right|both. This entry point is kept for direct
+    previews; the app loads the per-side files, which declare their side inline.
+  -->
+  <script src="./hand_viewer.js"></script>
+</head>
+<body>
+  <div id="viewport">
+    <div id="loading" data-tone="loading">
+      <div class="spinner"></div>
+      <span id="loading-text">Loading 3D hand…</span>
+    </div>
+    <canvas id="canvas3d"></canvas>
+  </div>
+</body>
+</html>

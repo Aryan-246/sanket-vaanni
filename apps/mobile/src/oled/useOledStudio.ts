@@ -10,11 +10,28 @@
  *
  * ## Why the writes are debounced
  *
- * Editing text means one keystroke per character, and each keystroke changes the
- * layout. Writing on every change would hit AsyncStorage dozens of times a
- * second while the user types, which is wasted work on a phone that is also
- * streaming sensor frames. Writes are therefore coalesced, and flushed
- * immediately on unmount so switching tabs cannot lose the last edit.
+ * Saving is a whole-profile commit, not a keystroke, so the debounce now
+ * coalesces *saves* rather than edits. It is kept because a save can still be
+ * followed immediately by another (switch profile, then rename), and because
+ * the flush on unmount must not lose a commit that has already been made.
+ *
+ * ## Why editing is transactional
+ *
+ * Every editor on this screen used to write straight through: one tap, one
+ * keystroke, one committed profile, and a debounced write to storage. That made
+ * "close the editor" and "keep what I just changed" the same action — the X
+ * button persisted whatever the user had been experimenting with, which is the
+ * opposite of what an X means.
+ *
+ * So edits now land in a `draft`. It is seeded from the saved configuration,
+ * every control on the screen renders it, and nothing reaches storage until the
+ * user presses Save. `save` commits the whole profile in one action; `discard`
+ * drops the draft and restores what was last saved.
+ *
+ * The draft is deliberately a single object for the whole studio rather than one
+ * per sheet: the main screen's controls (on/off, intro, loading, animation) edit
+ * the same profile the item editor does, and two independent drafts over one
+ * profile would let one editor silently undo the other.
  *
  * ## Why nothing is accepted before the first read completes
  *
@@ -45,6 +62,7 @@ import {
   migrateLegacy,
   nextProfileId,
   parseStudio,
+  sameSettings,
   type OledHandConfig,
   type OledIntro,
   type OledProfile,
@@ -76,11 +94,39 @@ export interface OledStudio {
   /** False until storage has been read once. Mutators are inert until then. */
   readonly isLoaded: boolean;
 
-  /** Edits the active profile's layout for one hand. */
+  /**
+   * The working copy being edited, and what every preview renders.
+   *
+   * It is the same object as `active` until the first edit, so an untouched
+   * studio carries no extra state. Edits below move this and nothing else —
+   * nothing reaches storage until `save`.
+   */
+  readonly draft: OledProfile;
+  /**
+   * True when the draft's settings differ from the last saved configuration.
+   *
+   * By value, not by identity — see `sameSettings`. An edit that is undone by
+   * hand leaves the profile as it was stored, and the studio should say so.
+   */
+  readonly isDirty: boolean;
+  /** Commits the draft into the active profile, atomically. */
+  readonly save: () => void;
+  /** Throws the draft away and restores the last saved configuration. */
+  readonly discard: () => void;
+
+  /** Edits the draft's layout for one hand. Not persisted until `save`. */
   readonly run: (side: GloveSide, intent: OledIntent) => void;
   /** Sets one hand's *desired* on/off. Not evidence the panel is on. */
   readonly setEnabled: (side: GloveSide, enabled: boolean) => void;
   readonly setIntro: (side: GloveSide, patch: Partial<OledIntro>) => void;
+  /**
+   * Replaces one hand's whole layout in the draft.
+   *
+   * Exists so a nested editor can cancel: it snapshots the layout when it opens
+   * and puts it back if the user leaves without keeping the changes. Draft-only,
+   * like every other edit here.
+   */
+  readonly setLayout: (side: GloveSide, layout: OledLayout) => void;
 
   readonly createProfile: (name: string) => void;
   readonly saveAsNew: (name: string) => void;
@@ -89,8 +135,15 @@ export interface OledStudio {
   readonly switchProfile: (id: string) => void;
   /** Refuses to remove the last profile. */
   readonly deleteProfile: (id: string) => void;
-  /** Restores both of that profile's hands to the defaults, keeping its name. */
-  readonly restoreProfile: (id: string) => void;
+  /**
+   * Restores the active profile's two hands to the defaults, keeping its name.
+   *
+   * Draft-only, like every other edit: a restore is a change to the
+   * configuration, so it has to be undoable by Discard. Committing it on the
+   * spot would mean Discard brought back the customisation it had just
+   * confirmed the loss of — the user would read that as Discard being broken.
+   */
+  readonly restoreActive: () => void;
 }
 
 /** One hand replaced, the other carried over untouched. */
@@ -127,6 +180,35 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
     return { profiles: [profile], activeId: profile.id };
   });
   const [isLoaded, setIsLoaded] = useState(false);
+
+  /**
+   * The committed profile being edited.
+   *
+   * Derived rather than stored, so it always tracks the profile set: a load, a
+   * rename, a restore or a switch all move it, and the draft below follows it.
+   */
+  const active =
+    data.profiles.find((profile) => profile.id === data.activeId) ??
+    (data.profiles[0] as OledProfile);
+
+  // The working copy. Starts as the committed profile itself, so an untouched
+  // studio carries no second copy of anything.
+  const [draft, setDraft] = useState<OledProfile>(active);
+  const draftRef = useRef(draft);
+
+  /*
+   * Re-seed the draft whenever the committed active profile is replaced: the
+   * first load, a profile switch, a rename, a restore, or a save.
+   *
+   * Keyed on the profile *object*, not its id: an edit moves the draft and
+   * leaves `data` alone, so this does not fire while the user is editing — and
+   * on save the committed object becomes the draft itself, which React treats
+   * as no change at all.
+   */
+  useEffect(() => {
+    draftRef.current = active;
+    setDraft(active);
+  }, [active]);
 
   // Mirrors so callbacks can read the current value without being recreated on
   // every edit — which would defeat the memoisation on every downstream row.
@@ -220,14 +302,38 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
 
   /* ------------------------------------------------------------- mutations */
 
-  const updateActive = useCallback(
-    (update: (profile: OledProfile) => OledProfile) => {
-      if (!loadedRef.current) return;
-      const next = replaceActive(dataRef.current, update);
-      if (next !== null) commit(next, true);
-    },
-    [commit],
-  );
+  /**
+   * The only way the draft changes.
+   *
+   * Deliberately never touches `data`, so no edit made through here can reach
+   * storage on its own — persistence happens in `save` and nowhere else.
+   */
+  const amend = useCallback((update: (profile: OledProfile) => OledProfile) => {
+    if (!loadedRef.current) return;
+    const next = update(draftRef.current);
+    if (next === draftRef.current) return;
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  /** Commits the draft into the active profile, as one atomic replacement. */
+  const save = useCallback(() => {
+    if (!loadedRef.current) return;
+    const next = replaceActive(dataRef.current, () => draftRef.current);
+    // `null` means the draft is identical to what is stored: nothing to do.
+    if (next === null) return;
+    commit(next, true);
+  }, [commit]);
+
+  /** Drops the draft and restores the last saved configuration. */
+  const discard = useCallback(() => {
+    const current = dataRef.current;
+    const committed =
+      current.profiles.find((profile) => profile.id === current.activeId) ??
+      (current.profiles[0] as OledProfile);
+    draftRef.current = committed;
+    setDraft(committed);
+  }, []);
 
   const run = useCallback(
     (side: GloveSide, intent: OledIntent) => {
@@ -240,19 +346,19 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
        */
       const action: OledAction =
         intent.type === 'reset' ? intent : { ...intent, atMs: nowRef.current() };
-      updateActive((profile) =>
+      amend((profile) =>
         withHand(profile, side, (hand) => {
           const layout: OledLayout = oledReducer(hand.layout, action);
           return layout === hand.layout ? hand : { ...hand, layout };
         }),
       );
     },
-    [updateActive],
+    [amend],
   );
 
   const setEnabled = useCallback(
     (side: GloveSide, enabled: boolean) =>
-      updateActive((profile) => {
+      amend((profile) => {
         const hand = profile[side];
         if (hand.enabled === enabled) return profile;
         const next = { ...profile, updatedAtMs: nowRef.current() };
@@ -260,12 +366,12 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
           ? { ...next, left: { ...hand, enabled } }
           : { ...next, right: { ...hand, enabled } };
       }),
-    [updateActive],
+    [amend],
   );
 
   const setIntro = useCallback(
     (side: GloveSide, patch: Partial<OledIntro>) =>
-      updateActive((profile) =>
+      amend((profile) =>
         withHand(profile, side, (hand) => {
           const intro = { ...hand.intro, ...patch };
           if (intro.durationMs === hand.intro.durationMs && intro.animate === hand.intro.animate) {
@@ -274,7 +380,15 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
           return { ...hand, intro };
         }),
       ),
-    [updateActive],
+    [amend],
+  );
+
+  const setLayout = useCallback(
+    (side: GloveSide, layout: OledLayout) =>
+      amend((profile) =>
+        withHand(profile, side, (hand) => (hand.layout === layout ? hand : { ...hand, layout })),
+      ),
+    [amend],
   );
 
   /* --------------------------------------------------------- profile set ops */
@@ -318,8 +432,17 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
     (name: string) => {
       const trimmed = name.trim().slice(0, MAX_PROFILE_NAME);
       const current = dataRef.current;
-      const source = current.profiles.find((profile) => profile.id === current.activeId);
-      if (source === undefined) return;
+      /*
+       * Copied from the *draft*, not from the committed profile.
+       *
+       * "Save as a new profile" means "keep what I am looking at, under another
+       * name". Copying the committed version instead would silently drop the
+       * very edits that prompted the action — and would leave a new profile
+       * identical to the old one, which is never what was wanted.
+       *
+       * The source profile is left untouched: this only ever adds.
+       */
+      const source = draftRef.current;
 
       const at = nowRef.current();
       const copy = copyProfile(source);
@@ -412,50 +535,36 @@ export function useOledStudio(storage: Storage, now: () => number = Date.now): O
     [commit],
   );
 
-  const restoreProfile = useCallback(
-    (id: string) => {
-      if (!loadedRef.current) return;
-      const current = dataRef.current;
-      const profile = current.profiles.find((candidate) => candidate.id === id);
-      if (profile === undefined) return;
-
-      // Fresh objects per hand, not one hand reused twice: two references to a
-      // single item array would make the two panels edit each other.
-      const hands = { left: copyHand(defaultHandConfig()), right: copyHand(defaultHandConfig()) };
-
-      commit(
-        {
-          profiles: current.profiles.map((candidate) =>
-            candidate.id === id
-              ? { ...candidate, ...hands, updatedAtMs: nowRef.current() }
-              : candidate,
-          ),
-          activeId: current.activeId,
-        },
-        true,
-      );
-    },
-    [commit],
+  const restoreActive = useCallback(
+    () =>
+      amend((profile) => {
+        // Fresh objects per hand, not one hand reused twice: two references to a
+        // single item array would make the two panels edit each other.
+        const hands = { left: copyHand(defaultHandConfig()), right: copyHand(defaultHandConfig()) };
+        return { ...profile, ...hands, updatedAtMs: nowRef.current() };
+      }),
+    [amend],
   );
-
-  const active =
-    data.profiles.find((profile) => profile.id === data.activeId) ??
-    (data.profiles[0] as OledProfile);
 
   return {
     profiles: data.profiles,
     active,
     isLoaded,
+    draft,
+    isDirty: !sameSettings(draft, active),
+    save,
+    discard,
     run,
     setEnabled,
     setIntro,
+    setLayout,
     createProfile,
     saveAsNew,
     renameProfile,
     duplicateProfile,
     switchProfile,
     deleteProfile,
-    restoreProfile,
+    restoreActive,
   };
 }
 

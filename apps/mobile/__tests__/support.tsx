@@ -48,6 +48,21 @@ export interface RenderAppOptions {
   skipIntro?: boolean;
   /** Seed the theme preference, for theme tests that need a starting mode. */
   themeMode?: ThemeMode;
+  /**
+   * Called once per React commit.
+   *
+   * Wrapping the tree in a `Profiler` is what makes "how much does an update
+   * cost" a measured number rather than an impression. `actualDuration` is only
+   * meaningful as a *comparison* between two runs on this same setup — it is
+   * test-renderer time, not device time — which is exactly how the performance
+   * cases use it.
+   */
+  onCommit?: (info: CommitInfo) => void;
+}
+
+export interface CommitInfo {
+  readonly phase: string;
+  readonly actualDuration: number;
 }
 
 /**
@@ -69,15 +84,29 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<AppHarn
   const right = new MockTransport('right');
   const left = new MockTransport('left', { sideOffsetMs: 0 });
 
+  const app = (
+    <App
+      storage={storage}
+      transport={right}
+      leftTransport={left}
+      introSession={session}
+    />
+  );
+  const onCommit = options.onCommit;
+
   let renderer!: ReactTestRenderer.ReactTestRenderer;
   await ReactTestRenderer.act(async () => {
     renderer = ReactTestRenderer.create(
-      <App
-        storage={storage}
-        transport={right}
-        leftTransport={left}
-        introSession={session}
-      />,
+      onCommit === undefined ? (
+        app
+      ) : (
+        <React.Profiler
+          id="app"
+          onRender={(_id, phase, actualDuration) => onCommit({ phase, actualDuration })}
+        >
+          {app}
+        </React.Profiler>
+      ),
     );
   });
 

@@ -119,7 +119,7 @@ describe('UnavailableSpeaker', () => {
 
   it('rejects rather than silently succeeding', async () => {
     // Resolving would let a caller believe speech happened.
-    await expect(new UnavailableSpeaker().speak('hello')).rejects.toThrow(/not wire/i);
+    await expect(new UnavailableSpeaker().speak('hello')).rejects.toThrow(/not available on this platform/i);
   });
 
   it('allows stop() so cleanup paths need no special case', async () => {

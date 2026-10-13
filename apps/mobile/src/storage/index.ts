@@ -13,6 +13,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AppPreferences, ThemeMode } from '../app/preferences';
 import { parsePreferences } from '../app/preferences';
 import type { CalibrationProfile } from '../sensors/calibration';
+import type { AccentColorId } from '../theme/palette';
+import { ACCENT_COLOR_IDS } from '../theme/palette';
 
 /**
  * Versioned key namespace. Bump the version to invalidate old payloads.
@@ -27,6 +29,7 @@ const KEYS = {
   calibration: (side: string) => `sv/v1/calibration/${side}`,
   history: 'sv/v1/history',
   themeMode: 'sv/v1/theme-mode',
+  accentColor: 'sv/v1/accent-color',
   preferences: 'sv/v1/preferences',
   /**
    * OLED Studio state. Kept as opaque JSON here rather than typed in this
@@ -76,6 +79,10 @@ export interface Storage {
   /** Theme preference. `null` means the user has never chosen; use the default. */
   getThemeMode(): Promise<ThemeMode | null>;
   setThemeMode(mode: ThemeMode): Promise<void>;
+
+  /** Accent colour preference. `null` means use the default ('emerald'). */
+  getAccentColor(): Promise<AccentColorId | null>;
+  setAccentColor(color: AccentColorId): Promise<void>;
 
   getPreferences(): Promise<AppPreferences | null>;
   setPreferences(preferences: AppPreferences): Promise<void>;
@@ -141,6 +148,16 @@ export function createAsyncStorage(): Storage {
       await AsyncStorage.setItem(KEYS.themeMode, mode);
     },
 
+    async getAccentColor() {
+      const raw = await AsyncStorage.getItem(KEYS.accentColor);
+      return (ACCENT_COLOR_IDS as readonly string[]).includes(raw ?? '')
+        ? (raw as AccentColorId)
+        : null;
+    },
+    async setAccentColor(color) {
+      await AsyncStorage.setItem(KEYS.accentColor, color);
+    },
+
     async getPreferences() {
       const raw = await AsyncStorage.getItem(KEYS.preferences);
       if (raw === null) return null;
@@ -201,6 +218,16 @@ export function createInMemoryStorage(): Storage {
     },
     async setThemeMode(mode) {
       map.set(KEYS.themeMode, mode);
+    },
+
+    async getAccentColor() {
+      const raw = read(KEYS.accentColor);
+      return (ACCENT_COLOR_IDS as readonly string[]).includes(raw ?? '')
+        ? (raw as AccentColorId)
+        : null;
+    },
+    async setAccentColor(color) {
+      map.set(KEYS.accentColor, color);
     },
 
     async getPreferences() {

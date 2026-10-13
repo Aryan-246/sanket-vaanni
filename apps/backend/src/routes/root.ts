@@ -20,6 +20,8 @@ export async function rootRoutes(app: FastifyInstance): Promise<void> {
       'implemented yet — the firmware protocol is unverified. See docs/ble-protocol.md.',
     endpoints: {
       health: '/health',
+      notifications: '/notifications/status',
+      email: '/email/status',
     },
   }));
 }

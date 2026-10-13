@@ -63,7 +63,13 @@ export type IconName =
   | 'info'
   | 'scan'
   | 'arrowUp'
-  | 'arrowDown';
+  | 'arrowDown'
+  | 'copy'
+  | 'user'
+  | 'history'
+  | 'chat'
+  | 'mic'
+  | 'bell';
 
 export interface IconProps {
   name: IconName;
@@ -162,6 +168,18 @@ function render(name: IconName, ctx: Ctx): React.ReactNode {
       return <Clock ctx={ctx} />;
     case 'link':
       return <Link ctx={ctx} />;
+    case 'copy':
+      return <Copy ctx={ctx} />;
+    case 'user':
+      return <User ctx={ctx} />;
+    case 'history':
+      return <History ctx={ctx} />;
+    case 'chat':
+      return <Chat ctx={ctx} />;
+    case 'bell':
+      return <Bell ctx={ctx} />;
+    case 'mic':
+      return <Mic ctx={ctx} />;
     default:
       return null;
   }
@@ -885,6 +903,272 @@ function Link({ ctx }: { ctx: Ctx }): React.JSX.Element {
           ring,
           { transform: [{ rotate: '-40deg' }], marginLeft: 5 * ctx.u, opacity: 0.75 },
         ]}
+      />
+    </View>
+  );
+}
+
+/* -------------------------------------------------- shapes added for the
+ * five-destination navigation and the copy/account actions. Same 24-unit grid
+ * and the same View-based idiom as everything above: no SVG, no font glyphs.
+ */
+
+/**
+ * Copy — two sheets.
+ *
+ * The sheet behind is drawn as a bare top-left corner rather than a second full
+ * outline: a complete rectangle behind would show through the front sheet's
+ * transparent interior and read as a smudge at 21px.
+ */
+function Copy({ ctx }: { ctx: Ctx }): React.JSX.Element {
+  const u = ctx.u;
+  return (
+    <View style={styles.fill}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 3 * u,
+          left: 3 * u,
+          width: 12 * u,
+          height: 14 * u,
+          borderTopWidth: ctx.stroke,
+          borderLeftWidth: ctx.stroke,
+          borderTopLeftRadius: 3 * u,
+          borderColor: ctx.tint,
+          opacity: 0.6,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          top: 7 * u,
+          left: 9 * u,
+          width: 12 * u,
+          height: 14 * u,
+          borderRadius: 3 * u,
+          borderWidth: ctx.stroke,
+          borderColor: ctx.tint,
+        }}
+      />
+    </View>
+  );
+}
+
+/** User — a head above a shoulder arc, the universal account glyph. */
+function User({ ctx }: { ctx: Ctx }): React.JSX.Element {
+  const u = ctx.u;
+  return (
+    <View style={styles.fill}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 3 * u,
+          left: 8 * u,
+          width: 8 * u,
+          height: 8 * u,
+          borderRadius: 4 * u,
+          borderWidth: ctx.stroke,
+          borderColor: ctx.tint,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          top: 13 * u,
+          left: 4 * u,
+          width: 16 * u,
+          height: 9 * u,
+          borderTopLeftRadius: 8 * u,
+          borderTopRightRadius: 8 * u,
+          borderTopWidth: ctx.stroke,
+          borderLeftWidth: ctx.stroke,
+          borderRightWidth: ctx.stroke,
+          borderColor: ctx.tint,
+        }}
+      />
+    </View>
+  );
+}
+
+/**
+ * History — a dial with a rewind arrowhead.
+ *
+ * A plain clock already exists as `clock`, so this carries the extra arrow at
+ * the upper-left: the same dial, but reading as "past" rather than "time".
+ */
+function History({ ctx }: { ctx: Ctx }): React.JSX.Element {
+  const u = ctx.u;
+  const hand: ViewStyle = { position: 'absolute', backgroundColor: ctx.tint, borderRadius: 2 };
+  return (
+    <View style={styles.fill}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 4 * u,
+          left: 5 * u,
+          width: 17 * u,
+          height: 17 * u,
+          borderRadius: 8.5 * u,
+          borderWidth: ctx.stroke,
+          borderColor: ctx.tint,
+        }}
+      />
+      {/* Hands, drawn from the dial's centre at (13.5u, 12.5u). */}
+      <View style={[hand, { top: 8 * u, left: 13 * u, width: ctx.stroke, height: 5 * u }]} />
+      <View style={[hand, { top: 12 * u, left: 13.4 * u, width: 4.5 * u, height: ctx.stroke }]} />
+      {/* Rewind arrowhead: a square with two borders, rotated to point up-left. */}
+      <View
+        style={{
+          position: 'absolute',
+          top: 2 * u,
+          left: 1.5 * u,
+          width: 5 * u,
+          height: 5 * u,
+          borderLeftWidth: ctx.stroke,
+          borderBottomWidth: ctx.stroke,
+          borderColor: ctx.tint,
+          transform: [{ rotate: '45deg' }],
+        }}
+      />
+    </View>
+  );
+}
+
+/** Chat — a speech bubble with two lines of text and a solid tail. */
+function Chat({ ctx }: { ctx: Ctx }): React.JSX.Element {
+  const u = ctx.u;
+  const line: ViewStyle = {
+    position: 'absolute',
+    height: ctx.stroke,
+    borderRadius: 2,
+    backgroundColor: ctx.tint,
+    opacity: 0.7,
+  };
+  return (
+    <View style={styles.fill}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 4 * u,
+          left: 2.5 * u,
+          width: 19 * u,
+          height: 13 * u,
+          borderRadius: 4 * u,
+          borderWidth: ctx.stroke,
+          borderColor: ctx.tint,
+        }}
+      />
+      <View style={[line, { top: 8 * u, left: 6 * u, width: 11 * u }]} />
+      <View style={[line, { top: 11.5 * u, left: 6 * u, width: 7 * u }]} />
+      {/* Tail, a downward triangle sitting on the bubble's lower-left edge. */}
+      <View
+        style={{
+          position: 'absolute',
+          top: 16 * u,
+          left: 6 * u,
+          width: 0,
+          height: 0,
+          borderLeftWidth: 3 * u,
+          borderRightWidth: 3 * u,
+          borderTopWidth: 4 * u,
+          borderLeftColor: 'transparent',
+          borderRightColor: 'transparent',
+          borderTopColor: ctx.tint,
+        }}
+      />
+    </View>
+  );
+}
+
+/** Microphone — a capsule in a cradle, for the caption/listening controls. */
+function Mic({ ctx }: { ctx: Ctx }): React.JSX.Element {
+  const u = ctx.u;
+  return (
+    <View style={styles.fill}>
+      <View
+        style={{
+          position: 'absolute',
+          top: 2.5 * u,
+          left: 8 * u,
+          width: 8 * u,
+          height: 12 * u,
+          borderRadius: 4 * u,
+          borderWidth: ctx.stroke,
+          borderColor: ctx.tint,
+        }}
+      />
+      {/*
+        The cradle is a fully rounded box with its top border hidden, which
+        leaves a U. It is drawn on top of the capsule rather than behind it,
+        which is what makes the capsule read as sitting *inside* it.
+      */}
+      <View
+        style={{
+          position: 'absolute',
+          top: 10 * u,
+          left: 4.5 * u,
+          width: 15 * u,
+          height: 9 * u,
+          borderRadius: 7.5 * u,
+          borderWidth: ctx.stroke,
+          borderTopColor: 'transparent',
+          borderColor: ctx.tint,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          top: 19 * u,
+          left: 11.1 * u,
+          width: ctx.stroke,
+          height: 3 * u,
+          backgroundColor: ctx.tint,
+          borderRadius: 2,
+        }}
+      />
+    </View>
+  );
+}
+
+/**
+ * A bell, for notifications.
+ *
+ * Built from three stacked shapes rather than a path, like every other icon in
+ * this file: an arched body, a small cap above it, and a clapper below. The
+ * arch is what makes it read as a bell at 16 px — a plain rounded rectangle
+ * would read as a bag.
+ */
+function Bell({ ctx }: { ctx: Ctx }): React.JSX.Element {
+  return (
+    <View style={[styles.fill, styles.center]}>
+      <View
+        style={{
+          width: 3.4 * ctx.u,
+          height: 2.6 * ctx.u,
+          borderRadius: 1.6 * ctx.u,
+          backgroundColor: ctx.tint,
+          marginBottom: -0.6 * ctx.u,
+        }}
+      />
+      <View
+        style={{
+          width: 14.5 * ctx.u,
+          height: 13 * ctx.u,
+          backgroundColor: ctx.tint,
+          borderTopLeftRadius: 7.2 * ctx.u,
+          borderTopRightRadius: 7.2 * ctx.u,
+          borderBottomLeftRadius: 2.4 * ctx.u,
+          borderBottomRightRadius: 2.4 * ctx.u,
+        }}
+      />
+      <View
+        style={{
+          width: 4.6 * ctx.u,
+          height: 4.6 * ctx.u,
+          borderRadius: 2.3 * ctx.u,
+          backgroundColor: ctx.tint,
+          marginTop: 1.4 * ctx.u,
+        }}
       />
     </View>
   );

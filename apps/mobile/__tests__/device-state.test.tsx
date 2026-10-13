@@ -205,7 +205,9 @@ describe('connection card', () => {
     const output = shown(renderer);
 
     expect(output).toContain('The link is up but no sensor frames are arriving');
-    expect(output).toContain('Demo Mode');
+    // The badge reads "Demo"; "simulated" next to it is what says the stream
+    // is not hardware. Both must be present — neither alone is enough.
+    expect(output).toContain('Demo');
 
     await teardown(renderer);
   });
@@ -240,7 +242,9 @@ describe('connection card', () => {
     );
     const output = shown(renderer);
 
-    expect(output).toContain('Demo Mode');
+    // The badge reads "Demo"; "simulated" next to it is what says the stream
+    // is not hardware. Both must be present — neither alone is enough.
+    expect(output).toContain('Demo');
     expect(output).toContain('Demo simulator');
 
     await teardown(renderer);
@@ -405,7 +409,9 @@ describe('demo data is labelled everywhere it surfaces', () => {
     const output = renderedText(renderer);
 
     expect(right.getStatus().kind).toBe('connected');
-    expect(output).toContain('Demo Mode');
+    // The badge reads "Demo"; "simulated" next to it is what says the stream
+    // is not hardware. Both must be present — neither alone is enough.
+    expect(output).toContain('Demo');
     expect(output).toContain('simulated');
     // The sentinel is an implementation detail and must never be on screen.
     expect(output).not.toContain(MOCK_DEVICE_NAME);

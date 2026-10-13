@@ -15,6 +15,17 @@ buildscript {
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        /*
+         * Reads `app/google-services.json` and turns it into the Android
+         * resources Firebase reads at runtime.
+         *
+         * It is a build-time plugin rather than a runtime dependency, so it
+         * cannot be autolinked: React Native's autolinking only sees libraries
+         * with a native module, and this has none. Without it the JSON sits in
+         * the project unread and every Firebase call fails at runtime with an
+         * unhelpful "no default FirebaseApp" error.
+         */
+        classpath("com.google.gms:google-services:4.4.4")
     }
 }
 

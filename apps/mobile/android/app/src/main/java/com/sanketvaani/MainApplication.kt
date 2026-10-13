@@ -6,6 +6,7 @@ import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
 import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
+import com.sanketvaani.native.SanketVaanniPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -14,8 +15,10 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
+          // Modules that live inside this app are not autolinked, so the app's
+          // own package — on-device text-to-speech and the clipboard — is added
+          // here. Autolinked packages remain in the list above this line.
+          add(SanketVaanniPackage())
         },
     )
   }

@@ -28,11 +28,11 @@ function statusBarStyle(
   return bar === undefined ? null : (bar.props.barStyle as string);
 }
 
-/** Opens More, where the appearance control lives. */
+/** Opens Settings, where the appearance control lives. */
 async function openMore(
   renderer: ReactTestRenderer.ReactTestRenderer,
 ): Promise<void> {
-  await pressByLabel(renderer, 'More');
+  await pressByLabel(renderer, 'Settings');
 }
 
 describe('theme', () => {

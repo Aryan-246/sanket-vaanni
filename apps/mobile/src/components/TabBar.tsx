@@ -8,7 +8,7 @@ import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
 import { layout, motion, radii, spacing } from '../theme';
 
-export type TabKey = 'dashboard' | 'oled' | 'audit' | 'more';
+export type TabKey = 'dashboard' | 'oled' | 'textboard' | 'history' | 'more';
 
 export interface TabDefinition {
   readonly key: TabKey;
@@ -19,12 +19,19 @@ export interface TabDefinition {
 }
 
 /**
- * The four destinations.
+ * The five destinations.
  *
- * Order is deliberate: Dashboard is the live product, OLED and Audit are the
- * two working surfaces, More is where configuration lives. Putting More last
- * keeps the three things a user actually opens repeatedly on the left, under
- * the thumb.
+ * Order is deliberate. Dashboard is the live product — the screen a signing
+ * user holds up — so it is leftmost, under the thumb. OLED and Textboard are
+ * the two working surfaces that go with it. History is reference material and
+ * Settings is configuration, so both sit to the right where they are reached
+ * deliberately rather than by accident.
+ *
+ * Audit is no longer here. It was never a destination a user returns to; it is
+ * a diagnostic readout, and it now lives inside Settings where things you look
+ * at when something is wrong belong. Dropping it also freed the slot needed for
+ * History without making six equally-weighted tabs, which is more than a thumb
+ * can reach comfortably on a 1080-wide phone.
  */
 export const TABS: readonly TabDefinition[] = [
   {
@@ -40,12 +47,23 @@ export const TABS: readonly TabDefinition[] = [
     hint: 'Design what the glove display shows',
   },
   {
-    key: 'audit',
-    label: 'Audit',
-    icon: 'audit',
-    hint: 'Component health and diagnostics',
+    key: 'textboard',
+    label: 'Textboard',
+    icon: 'chat',
+    hint: 'Live captions and typed messages',
   },
-  { key: 'more', label: 'More', icon: 'more', hint: 'Settings and preferences' },
+  {
+    key: 'history',
+    label: 'History',
+    icon: 'history',
+    hint: 'Everything this device has recorded',
+  },
+  {
+    key: 'more',
+    label: 'Settings',
+    icon: 'more',
+    hint: 'Preferences, account and diagnostics',
+  },
 ];
 
 export interface TabBarProps {

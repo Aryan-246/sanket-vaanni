@@ -1,34 +1,60 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AccessibilityInfo, BackHandler, StatusBar, StyleSheet, View } from 'react-native';
 
+import { AccountProvider, useAccount } from '../account/AccountProvider';
 import { AppStateProvider } from './AppState';
 import { sessionIntro, type IntroSession } from './launchSession';
 import { TabBar, type TabKey } from '../components/TabBar';
+import { AccountSheet } from '../components/AccountSheet';
+import { AboutScreen } from '../screens/AboutScreen';
+import { AdminScreen } from '../screens/AdminScreen';
 import { AuditScreen } from '../screens/AuditScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
+import { HistoryScreen } from '../screens/HistoryScreen';
 import { IntroScreen } from '../screens/IntroScreen';
+import { MaintenanceScreen } from '../screens/MaintenanceScreen';
+import { MlScreen } from '../screens/MlScreen';
 import { MoreScreen } from '../screens/MoreScreen';
 import { OledScreen } from '../screens/OledScreen';
+import { ProfileScreen } from '../screens/ProfileScreen';
+import { TextboardScreen } from '../screens/TextboardScreen';
 import type { Storage } from '../storage';
 import type { GloveTransport } from '../ble/types';
+import { setupAuthDeepLinking } from '../supabase/linking';
 import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
-import { useAppState } from './AppState';
+import { useAppState, useMaintenanceState } from './AppState';
 
 /**
  * Route set.
  *
- * Two routes, not five. The four destinations are *tabs* within one route, and
- * keeping them out of the route machine is what stops the tab bar from being
- * unmounted and rebuilt on every switch — and what makes "return to Dashboard"
- * a state change rather than a navigation.
+ * Two top-level routes, one tab set, and a single level of detail screens.
  *
- * Still no navigation library. The app has one launch gate and one tab set,
- * with no deep links, no nested stacks and no back-stack to model. Adding a
- * router would be dependency weight for behaviour this file expresses in
- * twenty lines — but `docs/architecture.md` records that the intent flips the
- * moment a detail screen appears, because that is when a real stack exists.
+ * ## Why there is now a real stack
+ *
+ * This file used to say that a navigation library would only be worth its
+ * weight "the moment a detail screen appears, because that is when a real stack
+ * exists". Detail screens have now appeared — Profile, About Us, the audit
+ * readout, model management — so the question is worth answering rather than
+ * deferring again.
+ *
+ * The answer is still that a library is not needed, because this is a stack of
+ * depth *one*: every detail screen is pushed from a tab and popped back to it,
+ * there is no deep nesting, no tabs-inside-a-detail, and no route parameters
+ * beyond which screen to show. That is `DetailKey | null`. What a library would
+ * add is a URL model and history integration, neither of which this app has a
+ * consumer for yet.
+ *
+ * ## Only the active screen is mounted
+ *
+ * Deliberately preserved. The Dashboard subscribes to a sensor stream; keeping
+ * five screens mounted would mean that subscription kept re-rendering while the
+ * user was reading the audit page. Every screen here persists its own work as it
+ * is edited, so switching discards no user work — only scroll position.
  */
 type Route = 'intro' | 'tabs';
+
+/** A screen pushed over the tabs. Depth one; back always returns to a tab. */
+export type DetailKey = 'audit' | 'profile' | 'about' | 'admin' | 'ml';
 
 export interface RootNavigatorProps {
   /**
@@ -54,6 +80,24 @@ export function RootNavigator({
     introSession.shouldPlayIntro() ? 'intro' : 'tabs',
   );
   const [tab, setTab] = useState<TabKey>('dashboard');
+  const [detail, setDetail] = useState<DetailKey | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [recoveryRequested, setRecoveryRequested] = useState(false);
+
+  const { isAdmin, isReady } = useAccount();
+  const { maintenance } = useAppState();
+  const maintenanceState = useMaintenanceState();
+
+  /** Listen for auth deep link callbacks (e.g. password recovery) */
+  useEffect(() => {
+    const cleanup = setupAuthDeepLinking(() => {
+      setRoute('tabs');
+      setDetail('profile');
+      setAccountOpen(true);
+      setRecoveryRequested(true);
+    });
+    return cleanup;
+  }, []);
 
   /** Idempotent hand-off: whichever path fires first wins. */
   const finishIntro = useCallback(() => {
@@ -91,22 +135,46 @@ export function RootNavigator({
   }, [route, finishIntro, introSession]);
 
   /**
-   * Android back returns to the Dashboard from any other tab.
+   * The Admin entry is only offered once the profile has actually loaded.
    *
-   * Registered only when it would do something, so back on the Dashboard still
-   * reaches the OS and leaves the app rather than being swallowed by a handler
-   * that has nothing to do.
+   * `isAdmin` is false while the profile is still being fetched, which is the
+   * safe direction — briefly hiding a screen from an administrator is a
+   * cosmetic problem, whereas briefly showing it to everybody is not.
+   */
+  const canOpenAdmin = isReady && isAdmin;
+
+  const openDetail = useCallback((key: DetailKey) => setDetail(key), []);
+  const closeDetail = useCallback(() => setDetail(null), []);
+
+  /**
+   * Android back.
+   *
+   * Order matters and mirrors what the user sees: a pushed screen pops first, an
+   * open sheet closes next, and only then does back from a non-Dashboard tab
+   * return to the Dashboard. When none of those applies the handler is not
+   * registered at all, so back on the Dashboard still reaches the OS and leaves
+   * the app rather than being swallowed by a handler with nothing to do.
    */
   useEffect(() => {
-    if (route !== 'tabs' || tab === 'dashboard') return;
+    const hasDetail = detail !== null;
+    const hasSheet = accountOpen;
+    if (route !== 'tabs' || (!hasDetail && !hasSheet && tab === 'dashboard')) return;
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (accountOpen) {
+        setAccountOpen(false);
+        return true;
+      }
+      if (detail !== null) {
+        setDetail(null);
+        return true;
+      }
       setTab('dashboard');
       return true;
     });
 
     return () => subscription.remove();
-  }, [route, tab]);
+  }, [route, tab, detail, accountOpen]);
 
   /**
    * Replay is an explicit user action, so it bypasses the session gate
@@ -116,8 +184,70 @@ export function RootNavigator({
    */
   const handleReplayIntro = useCallback(() => {
     setTab('dashboard');
+    setDetail(null);
     setRoute('intro');
   }, []);
+
+  /**
+   * Maintenance.
+   *
+   * ## Who it blocks
+   *
+   * Everyone whose account is not an active administrator. The exemption is not
+   * a hole in the rule: an operator who closes the app has to be able to reopen
+   * it, and a maintenance mode that can only be lifted from a database console
+   * is a mode nobody would dare turn on. It is safe because every administration
+   * request re-reads the role from the database, so the exemption grants nothing
+   * the backend would not grant anyway.
+   *
+   * ## Why it is applied after every hook, and before the intro
+   *
+   * After every hook, because a conditional return that skips a hook would
+   * change the order hooks run in — the one thing React does not tolerate. And
+   * before the intro, because a persisted session must not bypass maintenance
+   * and neither should a launch that would otherwise play the animation.
+   */
+  const maintenanceOn = maintenanceState.status === 'on';
+  const adminExempt = isReady && isAdmin;
+
+  /**
+   * An exempt administrator is taken straight to the console.
+   *
+   * The one useful thing to do while the app is closed is open it again, and
+   * making an administrator hunt for the screen that does that would waste the
+   * exemption. This runs on the transition into the exempt state only, so an
+   * administrator who then closes the console is not dragged back into it.
+   */
+  useEffect(() => {
+    if (maintenanceOn && adminExempt) setDetail('admin');
+  }, [maintenanceOn, adminExempt]);
+
+  if (maintenanceOn && !adminExempt) {
+    return (
+      <View style={styles.tabs}>
+        <View style={styles.screen}>
+          <MaintenanceScreen
+            state={maintenanceState}
+            onRecheck={() => {
+              void maintenance.refresh();
+            }}
+            onOpenAdminSignIn={() => setAccountOpen(true)}
+          />
+        </View>
+        {/*
+          The sheet is mounted here, and only here, because its administrator
+          entry is the way out. Guarded by the same rule as everything else:
+          signing in as an ordinary account closes the sheet and leaves the user
+          exactly where they were.
+        */}
+        <AccountSheet
+          visible={accountOpen}
+          onClose={() => setAccountOpen(false)}
+          maintenanceOn
+        />
+      </View>
+    );
+  }
 
   if (route === 'intro') {
     return <IntroScreen onComplete={finishIntro} />;
@@ -125,28 +255,64 @@ export function RootNavigator({
 
   return (
     <View style={styles.tabs}>
-      {/*
-        Only the active tab is mounted. This is the performance decision, and
-        it is deliberate: four mounted screens would mean the Dashboard's 12 Hz
-        sensor subscription kept re-rendering while the user was reading the
-        audit page. Nothing important is lost — the OLED editor and every
-        preference persist as they are edited, so switching tabs discards no
-        user work, only scroll position.
-      */}
       <View style={styles.screen}>
-        {tab === 'dashboard' && <DashboardScreen onOpenSettings={() => setTab('more')} />}
-        {tab === 'oled' && <OledScreen />}
-        {tab === 'audit' && <AuditScreen />}
-        {tab === 'more' && (
-          <MoreScreen
-            onReplayIntro={handleReplayIntro}
-            onOpenOled={() => setTab('oled')}
-            onOpenAudit={() => setTab('audit')}
-          />
+        {detail === 'audit' && <AuditScreen onClose={closeDetail} />}
+        {detail === 'profile' && <ProfileScreen onClose={closeDetail} />}
+        {detail === 'about' && <AboutScreen onClose={closeDetail} />}
+        {detail === 'ml' && <MlScreen onClose={closeDetail} />}
+        {detail === 'admin' && <AdminScreen onClose={closeDetail} />}
+
+        {detail === null && (
+          <>
+            {tab === 'dashboard' && (
+              <DashboardScreen
+                onOpenSettings={() => setTab('more')}
+                onOpenAccount={() => setAccountOpen(true)}
+                onOpenTextboard={() => setTab('textboard')}
+              />
+            )}
+            {tab === 'oled' && <OledScreen />}
+            {tab === 'textboard' && <TextboardScreen onOpenAccount={() => setAccountOpen(true)} />}
+            {tab === 'history' && (
+              <HistoryScreen
+                onOpenAccount={() => setAccountOpen(true)}
+                onOpenSettings={() => setTab('more')}
+              />
+            )}
+            {tab === 'more' && (
+              <MoreScreen
+                onReplayIntro={handleReplayIntro}
+                onOpenOled={() => setTab('oled')}
+                onOpenAudit={() => openDetail('audit')}
+                onOpenProfile={() => openDetail('profile')}
+                onOpenAbout={() => openDetail('about')}
+                onOpenMl={() => openDetail('ml')}
+                // Admin is only reachable when the account actually holds the
+                // role. Passed as undefined otherwise, so the row is not drawn
+                // at all rather than being drawn and refused.
+                onOpenAdmin={canOpenAdmin ? () => openDetail('admin') : undefined}
+                onOpenAccount={() => setAccountOpen(true)}
+                initialRecoveryMode={recoveryRequested}
+                onCloseAccount={() => setRecoveryRequested(false)}
+              />
+            )}
+          </>
         )}
       </View>
 
-      <TabBar active={tab} onSelect={setTab} />
+      {/* The tab bar is hidden behind a pushed screen: it would otherwise offer
+          navigation away from a screen the user has not finished with. */}
+      {detail === null ? <TabBar active={tab} onSelect={setTab} /> : null}
+
+      <AccountSheet
+        visible={accountOpen}
+        onClose={() => {
+          setAccountOpen(false);
+          setRecoveryRequested(false);
+        }}
+        isRecoveryMode={recoveryRequested}
+        maintenanceOn={maintenanceOn}
+      />
     </View>
   );
 }
@@ -184,7 +350,7 @@ export interface AppProps {
   leftTransport?: GloveTransport;
 }
 
-/** The application root: state, then theme, then navigation. */
+/** The application root: state, then account, then theme, then navigation. */
 export function App({
   introSession,
   storage,
@@ -193,9 +359,65 @@ export function App({
 }: AppProps = {}): React.JSX.Element {
   return (
     <AppStateProvider storage={storage} transport={transport} leftTransport={leftTransport}>
-      <ThemeGate introSession={introSession} />
+      {/*
+        Account sits inside app state and outside the theme, because the account
+        answer is needed by the header on every screen and by the admin gate, and
+        neither of those should have to be re-derived per consumer.
+      */}
+      <AccountGate>
+        <ThemeGate introSession={introSession} />
+      </AccountGate>
     </AppStateProvider>
   );
+}
+
+/**
+ * Wires the push registration to the account lifecycle.
+ *
+ * A component rather than an import inside `AccountProvider`, because the
+ * dependency runs the other way: app state owns the push controller, the account
+ * provider owns the session, and neither should have to know about the other.
+ * This is the one place that does.
+ *
+ * Two jobs, and they are different jobs:
+ *
+ *  - `onBeforeSignOut` releases this install's push token *while the session is
+ *    still live*, which is the only moment the database will allow it.
+ *  - `PushAccountSync` keeps the token pointed at whoever is signed in now, so
+ *    that signing in records it and signing out stops it.
+ */
+function AccountGate({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const { push } = useAppState();
+
+  const releasePushRegistration = useCallback(async () => {
+    await push.setAccount(null);
+  }, [push]);
+
+  return (
+    <AccountProvider onBeforeSignOut={releasePushRegistration}>
+      <PushAccountSync />
+      {children}
+    </AccountProvider>
+  );
+}
+
+/**
+ * Tells the push controller which account is signed in.
+ *
+ * Renders nothing. It exists so that the push controller is not itself a
+ * consumer of the account context, which would make the account provider a
+ * dependency of the notification module and vice versa.
+ */
+function PushAccountSync(): null {
+  const { push } = useAppState();
+  const { user } = useAccount();
+  const accountId = user?.id ?? null;
+
+  useEffect(() => {
+    void push.setAccount(accountId);
+  }, [push, accountId]);
+
+  return null;
 }
 
 /**

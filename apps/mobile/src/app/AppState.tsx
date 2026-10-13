@@ -25,8 +25,15 @@ import type { PoseSource } from '../hands/pose';
 import type { ViewerFrame } from '../hands/viewer';
 import { createDemoCalibration, type CalibrationProfile } from '../sensors/calibration';
 import { PoseStream } from '../hands/stream';
-import { UnavailableSpeaker } from '../speech';
-import type { Speaker } from '../speech';
+import { createSpeaker } from '../speech/createSpeaker';
+import type { Speaker, SpeechState } from '../speech';
+import { SpeechController } from '../speech';
+import { CaptionsController } from '../captions';
+import type { CaptionsState } from '../captions';
+import { MaintenanceController } from '../maintenance';
+import type { MaintenanceState } from '../maintenance';
+import { PushController } from '../notifications';
+import type { PushState } from '../notifications';
 import { createAsyncStorage, type Storage } from '../storage';
 import { UnimplementedTranslator, type Translator } from '../translation';
 
@@ -47,11 +54,43 @@ export interface AppStateValue {
   readonly calibration: Readonly<Record<GloveSide, CalibrationProfile>>;
   readonly recogniser: Recogniser;
   readonly speaker: Speaker;
+  /**
+   * Speech output state: whether audio is genuinely playing, what was last
+   * spoken, and why the last attempt failed. One writer, many readers.
+   */
+  readonly speech: SpeechController;
+  /**
+   * The running transcript: what the microphone heard, what the glove produced,
+   * and what was typed, each line tagged with which of the three it came from.
+   */
+  readonly captions: CaptionsController;
+  /**
+   * Maintenance mode, as the database last reported it.
+   *
+   * Read from `app_settings`, which signed-out clients may read, because the
+   * whole purpose is to stop a sign-in and a check that runs after
+   * authentication cannot do that. See `maintenance/controller.ts`.
+   */
+  readonly maintenance: MaintenanceController;
+  /**
+   * Push notifications.
+   *
+   * Holds this install's Firebase registration token and which account it is
+   * recorded against. It cannot send a notification — see
+   * `notifications/controller.ts` for why that is a server operation and not a
+   * client one.
+   */
+  readonly push: PushController;
   readonly translator: Translator;
   readonly recognitionAvailable: boolean;
   readonly recognitionUnavailableReason: string | null;
-  readonly speechAvailable: boolean;
-  readonly speechUnavailableReason: string | null;
+  /*
+   * There is no `speechAvailable` here on purpose. Whether the device can speak
+   * is answered asynchronously by the platform engine, so a value captured when
+   * this provider renders would go stale the moment the engine came up — and it
+   * would go stale in the direction that makes a working feature look broken.
+   * Components read `useSpeechState()`, which subscribes to the live answer.
+   */
 }
 
 const AppStateContext = createContext<AppStateValue | null>(null);
@@ -165,20 +204,96 @@ export function AppStateProvider({
   );
 
   const recogniser = useMemo(() => new UnimplementedRecogniser(profile), [profile]);
-  const speaker = useMemo(() => new UnavailableSpeaker(), []);
+  /**
+   * The device's own speech engine where one exists, otherwise a speaker that
+   * says why it cannot speak. Chosen at runtime, because whether a phone can
+   * talk depends on the phone rather than on the build.
+   */
+  const speaker = useMemo(() => createSpeaker(), []);
   const translator = useMemo(() => new UnimplementedTranslator(), []);
+
+  /**
+   * Speech state, shared by everything that needs to know whether the app is
+   * talking. See `speech/controller.ts` for why this is a store rather than a
+   * piece of component state.
+   */
+  const speech = useMemo(() => new SpeechController(speaker), [speaker]);
+
+  /**
+   * Live captions. Constructed eagerly because it asks the platform — once —
+   * whether a speech recognition service exists at all, and the Textboard needs
+   * that answer the first time it is opened rather than after a probe.
+   */
+  const captions = useMemo(() => new CaptionsController(), []);
+
+  /**
+   * Maintenance mode.
+   *
+   * Constructed here and checked from an effect rather than a constructor, so
+   * that building the provider has no side effect. The check runs from the
+   * composed `useEffect` below, next to the other lifecycle work.
+   */
+  const maintenance = useMemo(() => new MaintenanceController(activeStorage), [activeStorage]);
+
+  /**
+   * Push notifications.
+   *
+   * Constructed eagerly, like captions, because its constructor is what asks the
+   * platform whether Firebase exists in this build and attaches the listeners
+   * for token rotation and notification taps. A notification tapped to launch
+   * the app has to be read at start, not the first time somebody opens a
+   * settings screen.
+   *
+   * It does not ask for permission here. Nothing is requested from the user
+   * until they turn notifications on — see `notifications/controller.ts`.
+   */
+  const push = useMemo(() => new PushController({ storage: activeStorage }), [activeStorage]);
 
   // Dispose on unmount so no simulator interval survives the provider.
   useEffect(() => {
     const active = controllers;
     const streams = poseStreams;
+    const speechController = speech;
+    const captionsController = captions;
+    const maintenanceController = maintenance;
+    const pushController = push;
     return () => {
       active.left.dispose();
       active.right.dispose();
       streams.left.reset();
       streams.right.reset();
+      // Stops any utterance in flight and drops subscribers, so a hot reload
+      // does not leave the phone talking to a component that no longer exists.
+      speechController.dispose();
+      // Closes the microphone. A poll timer that outlived the provider would
+      // keep reading a recogniser nobody is displaying.
+      captionsController.dispose();
+      maintenanceController.dispose();
+      // Detaches the Firebase listeners. Leaving them attached across a hot
+      // reload would deliver each message to every generation of the provider.
+      pushController.dispose();
     };
-  }, [controllers, poseStreams]);
+  }, [controllers, poseStreams, speech, captions, maintenance, push]);
+
+  /**
+   * The maintenance check, and the re-check on resume.
+   *
+   * Resume is handled here rather than in the gate component because the answer
+   * belongs to the whole app: a user who leaves mid-session and returns after an
+   * operator has closed the app must meet the closed app, not a screen that
+   * decided once at launch and never asked again.
+   */
+  useEffect(() => {
+    void maintenance.refresh();
+
+    const subscription = RNAppState.addEventListener('change', (next) => {
+      if (next === 'active') void maintenance.refresh();
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [maintenance]);
 
   /**
    * Suspend frame production while backgrounded.
@@ -209,11 +324,13 @@ export function AppStateProvider({
       calibration,
       recogniser,
       speaker,
+      speech,
+      captions,
+      maintenance,
+      push,
       translator,
       recognitionAvailable: recogniser.isAvailable,
       recognitionUnavailableReason: recogniser.unavailableReason,
-      speechAvailable: speaker.isAvailable,
-      speechUnavailableReason: speaker.unavailableReason,
     }),
     [
       activeStorage,
@@ -225,6 +342,10 @@ export function AppStateProvider({
       calibration,
       recogniser,
       speaker,
+      speech,
+      captions,
+      maintenance,
+      push,
       translator,
     ],
   );
@@ -260,13 +381,69 @@ export function useGlove(side: GloveSide): GloveSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
+/**
+ * Live speech state.
+ *
+ * Same `useSyncExternalStore` shape as `useGlove`, and for the same reason: a
+ * component that shows whether the app is talking must not render a stale
+ * answer, and must not miss a transition between "started" and "finished".
+ */
+export function useSpeechState(): SpeechState {
+  const { speech } = useAppState();
+  return useSyncExternalStore(speech.subscribe, speech.getSnapshot);
+}
+
+/**
+ * Live caption state.
+ *
+ * Separate from `useSpeechState` rather than folded into it because the two
+ * change at completely different rates: captions update several times a second
+ * while the microphone is open, and speech changes twice per utterance. One
+ * combined subscription would re-render the speech controls on every interim
+ * word.
+ */
+export function useCaptionsState(): CaptionsState {
+  const { captions } = useAppState();
+  return useSyncExternalStore(captions.subscribe, captions.getSnapshot, captions.getSnapshot);
+}
+
+/**
+ * Live push notification state.
+ *
+ * A subscription rather than a value read once, because almost everything in it
+ * arrives asynchronously and from outside the app: permission comes back from
+ * the system dialog, the token comes back from Firebase, and a token can be
+ * rotated by Google at any time while the app is running. A screen that read
+ * this once would show "no token" forever to a user whose token had just
+ * arrived.
+ */
+export function usePushState(): PushState {
+  const { push } = useAppState();
+  return useSyncExternalStore(push.subscribe, push.getSnapshot, push.getSnapshot);
+}
+
+/**
+ * Live maintenance state.
+ *
+ * Same store shape as the two above. Read by the gate that closes the app, by
+ * the account sheet so that a sign-in respects it, and by Settings so an
+ * administrator can see what the app currently believes.
+ */
+export function useMaintenanceState(): MaintenanceState {
+  const { maintenance } = useAppState();
+  return useSyncExternalStore(
+    maintenance.subscribe,
+    maintenance.getSnapshot,
+    maintenance.getSnapshot,
+  );
+}
+
 export interface GloveActions {
   scan: () => Promise<void>;
   connect: (deviceId: string) => Promise<void>;
   disconnect: () => Promise<void>;
   retry: () => Promise<void>;
 }
-
 /** The imperative actions for one glove. Stable across renders. */
 export function useGloveActions(side: GloveSide): GloveActions {
   const { controllers } = useAppState();

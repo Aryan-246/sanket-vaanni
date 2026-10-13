@@ -220,7 +220,7 @@ describe('the voice panel heading', () => {
       />,
     );
 
-    expect(renderedText(renderer)).toContain('Voice');
+    expect(renderedText(renderer)).toContain('Speech output');
     expect(renderedText(renderer)).toContain('Off');
 
     await teardown(renderer);
@@ -255,9 +255,9 @@ describe('text under accessibility font scaling', () => {
       }
     };
 
-    // All four tabs, because `RootNavigator` mounts only the active one.
+    // All five tabs, because `RootNavigator` mounts only the active one.
     inspect('Dashboard');
-    for (const tab of ['OLED', 'Audit', 'More']) {
+    for (const tab of ['OLED', 'Textboard', 'History', 'Settings']) {
       await pressByLabel(renderer, tab);
       inspect(tab);
     }

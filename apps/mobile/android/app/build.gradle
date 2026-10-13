@@ -3,6 +3,37 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 /**
+ * Firebase Messaging.
+ *
+ * ## Why this is conditional
+ *
+ * The plugin demands `google-services.json` and fails the build outright if it
+ * is not there. That file is gitignored — it identifies a specific Firebase
+ * project and belongs to whoever configures that project, not to the
+ * repository — so a fresh clone would not build at all if the plugin were
+ * applied unconditionally.
+ *
+ * Applying it only when the file is present keeps the app building for someone
+ * who has not set up Firebase, at the cost of that build having no push. That
+ * trade is made visible rather than silent: this warning prints on every build
+ * without the file, and the app itself reports at runtime that push is
+ * unavailable rather than showing a switch that does nothing.
+ *
+ * Android push is the only platform wired up here. iOS APNs is deliberately
+ * absent — it needs an Apple Developer account, which this project does not
+ * currently have.
+ */
+def googleServicesJson = file("google-services.json")
+if (googleServicesJson.exists()) {
+    apply plugin: "com.google.gms.google-services"
+} else {
+    logger.warn(
+        "google-services.json is absent: building without Firebase Cloud Messaging. " +
+        "Push notifications will be unavailable in this build."
+    )
+}
+
+/**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */

@@ -44,13 +44,13 @@ export interface OutputLanguage {
   /** Endonym, where one is in common use. */
   readonly nativeName: string | null;
   /**
-   * Whether a TTS engine for this language has been wired up.
+   * BCP-47 tag handed to the speech engine, e.g. `hi-IN`.
    *
-   * `false` everywhere, because no TTS engine exists yet. This is not a
-   * statement about Android's language coverage — Android ships TTS for many
-   * of these — it is a statement about this app, which has no speaker.
+   * Regional rather than bare (`hi-IN`, not `hi`) because Android's voice data
+   * is installed per locale, and asking for the region the app targets gets the
+   * right voice instead of whatever the engine picks as a fallback.
    */
-  readonly speechWired: boolean;
+  readonly speechTag: string;
 }
 
 /**
@@ -60,13 +60,23 @@ export interface OutputLanguage {
  * different axes and are configured separately: a user may sign ISL and read
  * Hindi, or sign ASL and read English. Nothing here implies that any sign
  * language has a vocabulary — none do.
+ *
+ * ## There is no `speechWired` flag any more
+ *
+ * There used to be, and it was `false` for every language — a build-time claim
+ * that this app had no speaker. It now does, so that constant would have been a
+ * lie in one direction or the other for every device. Whether a given phone can
+ * actually speak a given language is a fact about *that phone's* installed voice
+ * data, so it is asked of the engine at runtime
+ * (`DeviceSpeaker.checkLanguage`) and reported per language, rather than
+ * asserted here for all of them.
  */
 export const OUTPUT_LANGUAGES: readonly OutputLanguage[] = [
-  { code: 'en', name: 'English', nativeName: null, speechWired: false },
-  { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी', speechWired: false },
-  { code: 'mr', name: 'Marathi', nativeName: 'मराठी', speechWired: false },
-  { code: 'ta', name: 'Tamil', nativeName: 'தமிழ்', speechWired: false },
-  { code: 'bn', name: 'Bengali', nativeName: 'বাংলা', speechWired: false },
+  { code: 'en', name: 'English', nativeName: null, speechTag: 'en-IN' },
+  { code: 'hi', name: 'Hindi', nativeName: 'हिन्दी', speechTag: 'hi-IN' },
+  { code: 'mr', name: 'Marathi', nativeName: 'मराठी', speechTag: 'mr-IN' },
+  { code: 'ta', name: 'Tamil', nativeName: 'தமிழ்', speechTag: 'ta-IN' },
+  { code: 'bn', name: 'Bengali', nativeName: 'বাংলা', speechTag: 'bn-IN' },
 ];
 
 export function findOutputLanguage(code: string): OutputLanguage | undefined {

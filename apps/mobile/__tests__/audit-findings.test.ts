@@ -103,7 +103,13 @@ function appAudit(
     speaker: new UnavailableSpeaker(),
     recognition: { kind: 'idle' },
     targetLanguageName: 'English',
-    targetLanguageSpeechWired: false,
+    targetLanguageSpeechTag: 'en-IN',
+    // `null` rather than `false`: these tests run without a speech engine, so
+    // the honest input is "not asked", which is what `unknown` renders as. A
+    // `false` here would make the fixture assert that the device has no English
+    // voice, which nothing has established.
+    targetLanguageVoiceInstalled: null,
+    targetLanguageVoiceReason: null,
     ...overrides,
   });
 }
@@ -463,14 +469,16 @@ describe('appFindings', () => {
     expect(profile.detail).toContain('no vocabulary defined');
   });
 
-  it('reports translation, speech and the chosen language as unavailable', () => {
+  it('reports translation and speech as unavailable, and the voice as unknown', () => {
     expect(byKey(app, 'app.translation').state).toBe('unavailable');
     expect(byKey(app, 'app.speech').state).toBe('unavailable');
 
     const language = byKey(app, 'app.speech-language');
-    expect(language.state).toBe('unavailable');
-    // It declines to rule out Android's own coverage, which it cannot see.
-    expect(language.detail).toContain('can neither use nor rule one out');
+    // The fixture passes `targetLanguageVoiceInstalled: null` — "not asked",
+    // which is not the same as "no voice installed". Only a confirmed false
+    // may render as unavailable; an unanswered probe is unknown.
+    expect(language.state).toBe('unknown');
+    expect(language.detail).toContain('has not been established yet');
   });
 
   it('says the Bluetooth adapter is unknown, because nothing has asked', () => {

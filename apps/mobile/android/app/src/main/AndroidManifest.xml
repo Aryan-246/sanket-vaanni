@@ -2,6 +2,49 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      Microphone access, for live captions only.
+
+      Declared rather than requested at install: the permission is asked for at
+      runtime, and only when the user turns captions on. The app is fully usable
+      with it denied — nothing else reads the microphone, and the Textboard falls
+      back to typing and to glove input.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
+      Notifications, for push messages.
+
+      Android 13 (API 33) introduced this as a runtime permission: an app may
+      declare it, but the user grants it, and until they do the system discards
+      any notification the app posts. It is requested only when the user turns
+      notifications on in Settings — never at launch — which is why the app is
+      fully usable with it denied.
+
+      On Android 12 and below this permission does not exist and the declaration
+      is ignored; the user's choice lives in system settings instead. Firebase
+      reports both cases through the same `requestPermission` call, so the app
+      does not have to branch on the API level itself.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      Android 11+ package visibility.
+
+      Without these two queries the app cannot see the speech recognition
+      service or the text-to-speech engine, and both would report themselves
+      unavailable on a phone that has them. `isRecognitionAvailable` would then
+      answer "no recogniser" for a reason that has nothing to do with the device.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"
@@ -22,6 +65,13 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="sanketvaani" android:host="auth-callback" />
+        </intent-filter>
       </activity>
+
     </application>
 </manifest>

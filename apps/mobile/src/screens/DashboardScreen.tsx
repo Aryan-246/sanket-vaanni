@@ -3,28 +3,32 @@ import { StyleSheet, View } from 'react-native';
 
 import { ActionButton } from '../components/ActionButton';
 import { AppText } from '../components/AppText';
+import { BrandHeader } from '../components/BrandHeader';
+import { DetectedTextCard } from '../components/DetectedTextCard';
 import { DiagnosticsCard } from '../components/DiagnosticsCard';
 import { FingerReadings } from '../components/FingerReadings';
 import { GloveConnectionBar } from '../components/GloveConnectionBar';
+import { GuestBanner } from '../components/GuestBanner';
 import { HandViewer } from '../components/HandViewer';
 import { Icon } from '../components/Icon';
-import { RecognitionPanel } from '../components/RecognitionPanel';
 import { Screen } from '../components/Screen';
-import { ScreenHeader } from '../components/ScreenHeader';
 import { Sheet } from '../components/Sheet';
-import { TranslatorPanel } from '../components/TranslatorPanel';
 import { VoicePanel } from '../components/VoicePanel';
+import { OrbStage } from '../components/orb/OrbStage';
+import { useOrbSignal } from '../components/orb/useOrbSignal';
 import {
   useAppState,
   useGlove,
   useGloveActions,
   useLiveTranslation,
+  useSpeechState,
 } from '../app/AppState';
-import { findOutputLanguage } from '../app/preferences';
 import { deviceDisplayName } from '../ble/link';
 import type { DiscoveredGlove, GloveSide } from '../ble/types';
+import { findOutputLanguage } from '../app/preferences';
 import { ACTIVE_HAND_ASSET, HAND_ASSET_FINDINGS, HAND_ASSET_ROUTE } from '../hands/viewer';
-import { evaluateTranslation } from '../translation';
+import { outcomeText } from '../recognition/outcome';
+import { useAutoSpeak } from '../speech/useAutoSpeak';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
 import { layout, radii, spacing } from '../theme';
@@ -33,71 +37,72 @@ const SIDES: readonly GloveSide[] = ['left', 'right'];
 
 export interface DashboardScreenProps {
   /**
-   * Navigates to More. Passed in rather than reached for, so this screen has no
-   * knowledge of the navigator — which is what lets it be rendered in a test on
-   * its own.
+   * Navigates to Settings. Passed in rather than reached for, so this screen has
+   * no knowledge of the navigator — which is what lets it be rendered in a test
+   * on its own.
    */
   onOpenSettings?: () => void;
+  /** Opens the account surface, which the navigator hosts. */
+  onOpenAccount?: () => void;
+  /** Opens the Textboard tab. */
+  onOpenTextboard?: () => void;
 }
 
 /** Which explanation, if any, is open over the Dashboard. */
-type OpenSheet = 'recognition' | 'viewer' | 'device' | null;
+type OpenSheet = 'text' | 'viewer' | 'device' | null;
 
 /**
  * Dashboard — one live-translation experience for one or two hands.
  *
- * ## What changed, and why
+ * ## The composition, and why it is this order
  *
- * The previous Dashboard asked the user to choose a hand and then showed that
- * hand's result, that hand's pose and that hand's sensors, with a full connection
- * card for each glove underneath. Four things followed from that, and all four
- * were wrong:
+ * The screen is built around a single luminous centre. Above it, only identity:
+ * the wordmark, the live language pair, and the user's own avatar. Below it,
+ * the things a user reaches for in the order they reach for them:
  *
- *  1. **A mandatory selector.** Half the app was about one hand, so a two-handed
- *     sign had nowhere to be recognised even if a model had existed.
- *  2. **Duplication.** Connection state appeared in the status strip, in both
- *     cards, and again as badges. Five of ten sensor rows carried the same note.
- *  3. **Setup above content.** The largest elements on a screen about what a hand
- *     is doing were the controls for connecting it.
- *  4. **Prose instead of labels.** Wrist rows each repeated a paragraph on the
- *     accelerometer; a permanent footer carried a technical explanation.
+ *  1. **the orb** — what is happening, in one glance
+ *  2. **the gloves** — because nothing below this point can do anything without
+ *     a connection, and the control to get one belongs next to the state it
+ *     changes
+ *  3. **detected text** — the reason the screen exists
+ *  4. **the hands** — the evidence behind the text, and the same viewer as before
+ *  5. **speech** — what happens to the text next
+ *  6. **the numbers** — per-finger readings, collapsed
+ *  7. **diagnostics** — collapsed, for whoever is debugging a glove
  *
- * Now the screen has one state, computed once in `useLiveTranslation`, and the
- * hand selector is gone entirely: which hands feed the recogniser is decided by
- * the vocabulary (`planInput`), and the viewer shows both hands at once. Which
- * hands are *connected* is still shown honestly — a missing hand is drawn at rest
- * and labelled, not omitted and not filled in from the other hand.
+ * ## What was removed from here, and where it went
  *
- * ## The order is still the argument
+ * The Live Translator panel used to sit near the bottom of this screen. It is
+ * configuration: a choice made once and then lived with. It now lives in
+ * Settings with the rest of configuration, and the *result* of that choice —
+ * `ISL → English` — stays in the header where it belongs, visible without being
+ * interactive. That is the difference between a setting and a status.
  *
- * Live content first, in the order the user's question arrives:
- *
- *  1. which gloves are connected
- *  2. what was recognised — the primary experience
- *  3. what the hands are doing
- *  4. the per-finger numbers, behind a disclosure
- *  5. whether it will be spoken
- *  6. the Live Translator
- *
- * Setup is at the top because it is brief now, and configuration is at the
- * bottom because it is rare. The paragraphs moved into the sheets behind the ⓘ
- * buttons, where a user who wants them can ask for them.
+ * The screen previously opened with a `ScreenHeader` reading "Dashboard". It
+ * now opens with the brand, because a title that repeats the name of the tab
+ * the user just tapped is the loudest element on the screen and the least
+ * informative.
  */
-export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React.JSX.Element {
+export function DashboardScreen({
+  onOpenSettings,
+  onOpenAccount,
+  onOpenTextboard,
+}: DashboardScreenProps): React.JSX.Element {
+  const styles = useStyles(makeStyles);
   const {
     preferences,
     updatePreferences,
-    profile,
     calibration,
-    speaker,
-    translator,
     controllers,
     recognitionUnavailableReason,
+    recognitionAvailable,
+    speech: speechController,
   } = useAppState();
 
   const [openSheet, setOpenSheet] = useState<OpenSheet>(null);
   const [deviceSide, setDeviceSide] = useState<GloveSide | null>(null);
   const [connectingBoth, setConnectingBoth] = useState(false);
+  const [guestBannerDismissed, setGuestBannerDismissed] = useState(false);
 
   const left = useGlove('left');
   const right = useGlove('right');
@@ -111,12 +116,21 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
   );
 
   const { plan, outcome, frames, live, provenance } = useLiveTranslation();
+  const orbSignal = useOrbSignal();
+  const speech = useSpeechState();
 
-  const language = findOutputLanguage(preferences.targetLanguageCode);
-  const translation = useMemo(
-    () => evaluateTranslation(translator, outcome, preferences.targetLanguageCode),
-    [translator, outcome, preferences.targetLanguageCode],
-  );
+  const detectedText = useMemo(() => outcomeText(outcome), [outcome]);
+
+  /**
+   * Speak what was recognised, when the user has switched speech on.
+   *
+   * The speech control is a persistent switch, so this is what makes it mean
+   * something: with it on, new text is spoken as it settles. With it off —
+   * which is the default — nothing is ever spoken unprompted.
+   */
+  useAutoSpeak(speechController, detectedText, preferences.voiceEnabled, {
+    language: findOutputLanguage(preferences.targetLanguageCode)?.speechTag,
+  });
 
   /**
    * Connect both gloves: scan each side, connect the first device it finds.
@@ -168,12 +182,54 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
   const closeSheet = useCallback(() => setOpenSheet(null), []);
 
   /**
-   * The devices found by the side whose chooser is open.
+   * A second line under the orb headline.
    *
-   * Read from the live link at render time rather than captured when the sheet
-   * opened, so a rescan while the sheet is up updates the list instead of
-   * leaving a stale one on screen.
+   * Only produced when it adds something the headline does not already say.
+   * Each branch is a fact from the outcome or the connection state — none of
+   * them is a reassuring filler line, because a filler line here would be read
+   * as a status.
    */
+  const orbDetail = useMemo<string | null>(() => {
+    if (outcome.kind === 'unavailable') {
+      return recognitionAvailable
+        ? 'The recogniser is reporting itself available, which this build does not expect.'
+        : 'No recognition model is loaded, so signs cannot be read yet. The viewer and the glove are live.';
+    }
+    if (outcome.kind === 'blocked') return outcome.reason;
+    if (outcome.kind === 'idle') {
+      const anyConnected = left.link.kind === 'connected' || right.link.kind === 'connected';
+      return anyConnected
+        ? 'Waiting for the first frame from the glove.'
+        : 'Connect a glove to begin.';
+    }
+    return null;
+  }, [outcome, recognitionAvailable, left.link.kind, right.link.kind]);
+
+  /**
+   * Why the detected-text card is empty, phrased for this specific situation.
+   *
+   * "No text yet" is not enough: it does not distinguish "the app is working and
+   * you have not signed" from "this build cannot read signs at all". Those are
+   * the two states a user most needs told apart, so they are.
+   */
+  const emptyCopy = useMemo(() => {
+    if (!recognitionAvailable) {
+      return {
+        title: 'Recognition is not available',
+        body: recognitionUnavailableReason
+          ? 'Sign recognition needs a vocabulary and a trained model. Neither exists in this build yet.'
+          : 'No model is loaded in this build.',
+      };
+    }
+    if (outcome.kind === 'blocked') {
+      return { title: 'Cannot start', body: outcome.reason };
+    }
+    return {
+      title: 'Nothing detected yet',
+      body: 'Recognised signs appear here as text, and can be copied the moment they arrive.',
+    };
+  }, [recognitionAvailable, recognitionUnavailableReason, outcome]);
+
   const chooserDevices: readonly DiscoveredGlove[] =
     deviceSide !== null && gloves[deviceSide].link.kind === 'nearby'
       ? gloves[deviceSide].link.discovered
@@ -181,12 +237,18 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
 
   return (
     <Screen scroll bottomInset={layout.tabBarHeight + spacing.xl} testID="dashboard-screen">
-      <ScreenHeader
-        title="Dashboard"
-        subtitle={`${profile.name} → ${language?.name ?? preferences.targetLanguageCode}`}
-      />
+      <BrandHeader title="Dashboard" onPressAvatar={onOpenAccount} />
 
-      {/* 1 — connection, compact. Both gloves, whichever are present. */}
+      {guestBannerDismissed ? null : (
+        <View style={styles.bannerSlot}>
+          <GuestBanner
+            onOpenAccount={onOpenAccount ?? (() => undefined)}
+            onDismiss={() => setGuestBannerDismissed(true)}
+          />
+        </View>
+      )}
+
+      {/* 2 — Left/right glove connection card. */}
       <GloveConnectionBar
         gloves={gloves}
         actions={actions}
@@ -198,17 +260,43 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
         testID="glove-connection-bar"
       />
 
-      {/* 2 — the primary experience: the one place a result appears. */}
-      <RecognitionPanel
-        outcome={outcome}
-        plan={plan}
-        profile={profile}
+      {/* 3 — Approved interactive 3D orb with theme palette control. */}
+      <OrbStage signal={orbSignal} detail={orbDetail} testID="orb-stage" />
+
+      {/* 4 — Detected text / recognition card immediately below the orb. */}
+      <DetectedTextCard
+        text={detectedText}
         provenance={provenance}
-        onExplain={() => setOpenSheet('recognition')}
-        testID="recognition-panel"
+        emptyTitle={emptyCopy.title}
+        emptyBody={emptyCopy.body}
+        onExplain={() => setOpenSheet('text')}
+        testID="detected-text-card"
       />
 
-      {/* 3 — the hands, both at once. */}
+      {/* 4b — Textboard action for conversation navigation. */}
+      {onOpenTextboard ? (
+        <ActionButton
+          label="Open the Textboard"
+          tone="ghost"
+          icon="chat"
+          onPress={onOpenTextboard}
+          accessibilityLabel="Open the Textboard"
+          accessibilityHint="Live captions and typed messages, for two-way conversation"
+        />
+      ) : null}
+
+      {/* 5 — Approved Speech Output waveform and ON/OFF switch. */}
+      <VoicePanel
+        enabled={preferences.voiceEnabled}
+        onToggle={(next) => updatePreferences({ voiceEnabled: next })}
+        available={speech.available}
+        unavailableReason={speech.unavailableReason}
+        phrase={detectedText}
+        speaking={speech.isSpeaking}
+        testID="voice-panel"
+      />
+
+      {/* 6 — Existing 2D/3D hand model viewer. */}
       <HandViewer
         frames={frames}
         live={live}
@@ -216,57 +304,24 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
         testID="hand-viewer"
       />
 
-      {/* 4 — the numbers, collapsed. Ten channels is a lot of screen for a
-             detail most users look at occasionally. */}
+      {/* 7 — Secondary device, finger readings, calibration, and diagnostics. */}
       <FingerReadings gloves={gloves} calibration={calibration} testID="finger-readings" />
 
-      {/* 5 — speech, phone and glove kept separate. */}
-      <VoicePanel
-        enabled={preferences.voiceEnabled}
-        onToggle={(next) => updatePreferences({ voiceEnabled: next })}
-        available={speaker.isAvailable}
-        unavailableReason={speaker.unavailableReason}
-        phrase={outcome.kind === 'result' ? outcome.candidate.label : null}
-        testID="voice-panel"
-      />
+      <DiagnosticsCard gloves={gloves} outcome={outcome} live={live} testID="diagnostics-card" />
 
-      {/* 6 — the Live Translator, below the recognition experience it depends
-             on, with the language lists behind its own sheet. */}
-      <TranslatorPanel
-        outcome={translation}
-        signProfileId={preferences.signProfileId}
-        targetLanguageCode={preferences.targetLanguageCode}
-        onChangeSignProfile={(id) => updatePreferences({ signProfileId: id })}
-        onChangeTargetLanguage={(code) => updatePreferences({ targetLanguageCode: code })}
-        testID="translator-panel"
-      />
-
-      {/* 7 — Diagnostics & 3D Rig Status (Collapsible for engineers and evaluators) */}
-      <DiagnosticsCard
-        gloves={gloves}
-        outcome={outcome}
-        live={live}
-        testID="diagnostics-card"
-      />
-
-      {/*
-        The only route from this screen into configuration that does not belong
-        on a live screen. Everything else moved to More; this stays because the
-        choice immediately above it is the one users change most.
-      */}
       {onOpenSettings !== undefined && (
         <ActionButton
-          label="Language and app settings"
+          label="Settings"
           tone="ghost"
           icon="more"
           onPress={onOpenSettings}
           accessibilityLabel="Open settings"
-          accessibilityHint="Opens More, where the sign language, target language and app preferences are configured"
+          accessibilityHint="Opens settings, where the sign language, target language and app preferences are configured"
         />
       )}
 
-      <RecognitionSheet
-        visible={openSheet === 'recognition'}
+      <DetectedTextSheet
+        visible={openSheet === 'text'}
         onClose={closeSheet}
         planKind={plan.kind}
         provenance={provenance}
@@ -293,13 +348,13 @@ export function DashboardScreen({ onOpenSettings }: DashboardScreenProps): React
 }
 
 /**
- * What the result panel is showing, in full.
+ * What the detected-text panel is showing, in full.
  *
  * The reason the recogniser is unavailable is a fact about this build that a
  * user can reasonably want, but it is a paragraph — so it lives here rather than
  * as a permanent footer under a live screen.
  */
-function RecognitionSheet({
+function DetectedTextSheet({
   visible,
   onClose,
   planKind,
@@ -319,7 +374,7 @@ function RecognitionSheet({
     <Sheet
       visible={visible}
       onClose={onClose}
-      title="About the result panel"
+      title="About detected text"
       description="What is recognised, and by what."
       footer={<ActionButton label="Close" onPress={onClose} accessibilityLabel="Close" />}
     >
@@ -338,6 +393,15 @@ function RecognitionSheet({
         </View>
 
         <AppText variant="overline" overline color={palette.textMuted} style={styles.sheetGap}>
+          Interim and finalised text
+        </AppText>
+        <AppText variant="caption" color={palette.textSecondary}>
+          Text that is still being decided is shown smaller and dimmer, with a trailing ellipsis.
+          Text that has been settled is shown large and solid. A settled line is never erased by a
+          line still in progress.
+        </AppText>
+
+        <AppText variant="overline" overline color={palette.textMuted} style={styles.sheetGap}>
           What the labels mean
         </AppText>
         <Detail
@@ -345,11 +409,11 @@ function RecognitionSheet({
           value="Every hand being read is a real glove reporting measurements."
         />
         <Detail
-          label="Demo Mode"
+          label="Demo"
           value="Every hand being read is a simulator. Nothing here came from hardware."
         />
         <Detail
-          label="Mixed data"
+          label="Mixed"
           value="One hand is hardware and one is a simulator. Read the two hand badges in the viewer to see which is which."
         />
         <Detail
@@ -603,6 +667,9 @@ function Detail({ label, value }: { label: string; value: string }): React.JSX.E
 
 const makeStyles = (palette: Palette) =>
   StyleSheet.create({
+    bannerSlot: {
+      marginBottom: spacing.md,
+    },
     sheetBody: {
       gap: spacing.sm,
     },

@@ -61,7 +61,13 @@ export function LanguageSelector({
       : OUTPUT_LANGUAGES.map((language) => ({
           id: language.code,
           label: language.name,
-          detail: language.speechWired ? 'Speech ready' : 'No speech engine',
+          /*
+           * The voice tag, not a claim about whether it works. Whether a phone
+           * can actually speak this language depends on voice data installed on
+           * *that phone*, which is asked of the engine at runtime in Settings.
+           * Asserting "Speech ready" here would be a guess.
+           */
+          detail: `Voice: ${language.speechTag}`,
           native: language.nativeName,
         }));
 

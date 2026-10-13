@@ -1,90 +1,111 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 
 import { ActionButton } from '../components/ActionButton';
 import { AppText } from '../components/AppText';
+import { BrandHeader } from '../components/BrandHeader';
 import { Card } from '../components/Card';
 import { Icon } from '../components/Icon';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { ListRow } from '../components/ListRow';
 import { Screen } from '../components/Screen';
-import { ScreenHeader } from '../components/ScreenHeader';
 import { SectionHeader } from '../components/SectionHeader';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Sheet } from '../components/Sheet';
 import { VoicePanel } from '../components/VoicePanel';
-import { useAppState } from '../app/AppState';
-import { findOutputLanguage, type ThemeMode } from '../app/preferences';
+import { useAccount } from '../account/AccountProvider';
+import { useBuildFacts } from '../hooks/useBuildFacts';
+import { PRODUCT_NAME } from '../config/app';
+import { syncManager } from '../supabase/sync';
+import type { SyncState } from '../supabase/types';
 import { layout as screenLayout, radii, spacing } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
+import { findOutputLanguage, type ThemeMode } from '../app/preferences';
+import { useAppState, usePushState } from '../app/AppState';
 
-const THEME_OPTIONS: readonly { value: ThemeMode; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
+const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
+  { label: 'System', value: 'system' },
+  { label: 'Dark', value: 'dark' },
+  { label: 'Light', value: 'light' },
 ];
 
-/**
- * Kept in step with `apps/mobile/package.json` by hand.
- *
- * There is no build-time injection of the version in this project, and pulling
- * the whole manifest into the bundle to read one string is not worth the weight.
- */
-const APP_VERSION = '0.0.1';
-
 export interface MoreScreenProps {
-  /** Replays the launch sequence. Owned by the navigator, not by this screen. */
-  onReplayIntro: () => void;
-  /** Switches to the OLED tab, where the layout is edited. */
+  onReplayIntro?: () => void;
   onOpenOled?: () => void;
-  /** Switches to the Audit tab, which is where component status lives. */
   onOpenAudit?: () => void;
+  /** Opens the profile screen. Shown whether or not an account is signed in. */
+  onOpenProfile?: () => void;
+  /** Opens About Us. */
+  onOpenAbout?: () => void;
+  /** Opens model management. */
+  onOpenMl?: () => void;
+  /**
+   * Opens the Super Admin section.
+   *
+   * Omitted — not disabled — when the signed-in account does not hold the admin
+   * role, so the row is not drawn at all. A row that is visible but refuses is a
+   * worse experience than one that does not appear, and the real authorization
+   * is enforced on the server in any case.
+   */
+  onOpenAdmin?: () => void;
+  /** Opens the account surface, which the navigator hosts. */
+  onOpenAccount?: () => void;
+  initialRecoveryMode?: boolean;
+  onCloseAccount?: () => void;
 }
 
 /**
- * More — the settings that are not about a connected glove.
+ * Settings — everything that is not about a connected glove.
  *
- * ## What belongs here, and what does not
+ * ## Why this is called Settings now
  *
- * The dividing line is frequency and ownership. Anything a user changes while
- * watching a sign belongs on the Dashboard or in the OLED Studio; anything they
- * set once and forget belongs here. That is why the sign-language and output
- * language choices are here behind rows, while the voice toggle — which is
- * reached for mid-conversation — is also on the Dashboard.
- *
- * ## Why there is no "Not implemented" wall
- *
- * There used to be an account card and six rows listing components that do not
- * exist. Both were removed. The Audit tab exists precisely to say what has and
- * has not reported, in one place, grouped by component — repeating six of its
- * rows here as prose was duplication that made this screen read as broken rather
- * than as a settings page. What remains is a single row pointing at the audit.
- *
- * ## Why there is no sign-in row
- *
- * A row that opened an empty login form would be a dead end. There is no
- * authentication, no user record and nothing that could be stored about one, so
- * there is no account section at all rather than a control that cannot do
- * anything. Authentication is deferred until it is asked for.
- *
- * ## Why some rows have no control
- *
- * "App language", "Text size" and "Reduce motion" are statements, not settings,
- * and are drawn as `ListRow` without `onPress` — so they carry no chevron and
- * look like the facts they are. Each says what the app actually does: it follows
- * the phone. A control that offered an override the app does not implement would
- * be the "button that appears functional but silently does nothing" the brief
- * rules out.
+ * It was "More", which is what a screen is called when nobody decided what it
+ * is. Every row on it is a setting or a fact about the build, and calling it
+ * "Settings" means the header answers the question the user arrived with.
  */
 export function MoreScreen({
   onReplayIntro,
   onOpenOled,
   onOpenAudit,
+  onOpenProfile,
+  onOpenAbout,
+  onOpenMl,
+  onOpenAdmin,
+  onOpenAccount,
+  initialRecoveryMode = false,
+  onCloseAccount,
 }: MoreScreenProps): React.JSX.Element {
   const { palette, mode, scheme, setMode } = useTheme();
   const { preferences, updatePreferences, profile, speaker } = useAppState();
+  const { push } = useAppState();
+  const pushState = usePushState();
+  const account = useAccount();
+  const build = useBuildFacts();
 
   const [sheet, setSheet] = useState<'sign' | 'translation' | null>(null);
+  const [syncState, setSyncState] = useState<SyncState>(syncManager.getState());
+
+  /*
+   * Sync status only.
+   *
+   * The session itself now comes from `useAccount()`. This screen used to hold
+   * its own `getCurrentSession()` + `subscribeToAuthState` subscription as
+   * well, which gave the app two independent sources of truth for whether
+   * anyone was signed in — and a second subscription to keep in step.
+   */
+  useEffect(() => {
+    const syncSub = syncManager.subscribe((state) => {
+      setSyncState(state);
+    });
+    return syncSub;
+  }, []);
+
+  useEffect(() => {
+    if (initialRecoveryMode) {
+      onOpenAccount?.();
+    }
+    onCloseAccount?.();
+  }, [initialRecoveryMode, onOpenAccount, onCloseAccount]);
 
   const language = findOutputLanguage(preferences.targetLanguageCode);
   const resolved = scheme === 'dark' ? 'Dark' : 'Light';
@@ -105,9 +126,124 @@ export function MoreScreen({
 
   const closeSheet = useCallback(() => setSheet(null), []);
 
+  /**
+   * What the notification switch is actually doing, in one sentence.
+   *
+   * Three situations that a boolean would flatten into "on" are separated here,
+   * because "notifications are switched on" is not the same claim as
+   * "notifications will reach you". A guest's token is held by the phone and
+   * recorded against nobody, so there is no account for the server to address —
+   * and saying "on" without that would be the kind of half-truth this project
+   * keeps out of its screens.
+   */
+  const pushDetail = useMemo(() => {
+    if (pushState.status === 'enabling') return 'Asking your phone for permission…';
+    // Any recorded failure is the most useful thing on this row, so it wins.
+    if (pushState.error !== null) return pushState.error;
+    if (!pushState.enabled) return 'Off. Nothing is delivered to this phone.';
+    if (pushState.registrationError !== null) return pushState.registrationError;
+    if (pushState.registeredAccountId === null) {
+      return 'On for this phone, but not linked to an account yet — so nothing can be addressed to you.';
+    }
+    return 'On, and linked to your account.';
+  }, [pushState]);
+
   return (
     <Screen scroll bottomInset={screenLayout.tabBarHeight} testID="more-screen">
-      <ScreenHeader title="More" subtitle="Appearance, languages and device settings" />
+      <BrandHeader title="Settings" showLanguages={false} onPressAvatar={onOpenAccount} />
+
+      {/* ----------------------------------------------- cloud & account */}
+
+      <SectionHeader label="Cloud & Account" detail="Cloud sync for preferences and OLED profiles." />
+      <Card style={styles.group}>
+        <ListRow
+          label={account.displayName ?? (account.isGuest ? 'Local only' : 'Signed in')}
+          value={
+            account.isGuest
+              ? 'Guest'
+              : syncState.status === 'synced'
+                ? 'Synced'
+                : syncState.status === 'syncing'
+                  ? 'Syncing...'
+                  : syncState.status === 'error'
+                    ? 'Sync error'
+                    : 'Active'
+          }
+          description={
+            account.isGuest
+              ? account.cloudAvailable
+                ? 'Everything lives on this phone. Tap to sign in and carry it across devices.'
+                : 'No account service is configured, so everything stays on this phone. Tap for details.'
+              : 'Signed in. Tap to manage your account, sync, or sign out.'
+          }
+          icon="link"
+          onPress={onOpenAccount}
+          testID="cloud-account-row"
+          last={onOpenProfile === undefined}
+        />
+        {onOpenProfile !== undefined && (
+          <ListRow
+            label="Profile"
+            value={account.isGuest ? 'Guest' : 'Your details'}
+            description="Display name, photo and account controls."
+            icon="user"
+            onPress={onOpenProfile}
+            last
+            testID="profile-row"
+          />
+        )}
+      </Card>
+
+      {/* --------------------------------------------------- notifications */}
+
+      <SectionHeader
+        label="Notifications"
+        detail="Messages sent to this phone by the Sanket Vaanni team."
+      />
+      <Card style={styles.group}>
+        {pushState.available ? (
+          <View style={styles.pushRow}>
+            <Icon
+              name="bell"
+              size={18}
+              color={pushState.enabled ? palette.accent : palette.textMuted}
+            />
+            <View style={styles.pushText}>
+              <AppText variant="label">Push notifications</AppText>
+              <AppText variant="caption" color={palette.textMuted}>
+                {pushDetail}
+              </AppText>
+            </View>
+            <ActionButton
+              label={pushState.enabled ? 'Turn off' : 'Turn on'}
+              tone={pushState.enabled ? 'secondary' : 'primary'}
+              compact
+              busy={pushState.status === 'enabling'}
+              onPress={() => {
+                void (pushState.enabled ? push.disable() : push.enable());
+              }}
+              accessibilityLabel={
+                pushState.enabled
+                  ? 'Turn push notifications off for this phone'
+                  : 'Turn push notifications on for this phone'
+              }
+            />
+          </View>
+        ) : (
+          /*
+           * No switch, because there is nothing it could do. A phone with no
+           * Google Play services, or a build assembled without a Firebase
+           * project, cannot receive these messages at all — and offering a
+           * control that cannot work is worse than saying why.
+           */
+          <View style={styles.pushRow}>
+            <Icon name="warning" size={18} color={palette.warning} />
+            <AppText variant="caption" color={palette.textSecondary} style={styles.pushText}>
+              {pushState.unavailableReason}
+            </AppText>
+          </View>
+        )}
+      </Card>
 
       {/* ----------------------------------------------------------- intro */}
 
@@ -179,9 +315,9 @@ export function MoreScreen({
           label="Output language"
           value={language?.name ?? preferences.targetLanguageCode.toUpperCase()}
           description={
-            language?.speechWired === true
-              ? 'A voice is wired up for this language.'
-              : 'No speech engine for this language yet.'
+            language
+              ? `Spoken as ${language.speechTag}. No translation model exists yet, so no text reaches the speech engine.`
+              : `Spoken as ${preferences.targetLanguageCode.toUpperCase()}.`
           }
           icon="volume"
           onPress={() => setSheet('translation')}
@@ -201,7 +337,7 @@ export function MoreScreen({
 
       {/* ----------------------------------------------------------- voice */}
 
-      <SectionHeader label="Voice" />
+      <SectionHeader label="Speech output" />
       <VoicePanel
         enabled={preferences.voiceEnabled}
         onToggle={(next) => updatePreferences({ voiceEnabled: next })}
@@ -240,21 +376,58 @@ export function MoreScreen({
 
       {/* ----------------------------------------------------------- about */}
 
+      <SectionHeader label="Recognition" detail="What the glove is read against." />
+      <Card style={styles.group}>
+        {onOpenMl !== undefined && (
+          <ListRow
+            label="Models and vocabulary"
+            value="Not installed"
+            description="Which recognition models exist, what they cover, and what is missing."
+            icon="scan"
+            onPress={onOpenMl}
+            last
+            testID="models-row"
+          />
+        )}
+      </Card>
+
       <SectionHeader label="About" />
       <Card style={styles.group}>
+        {onOpenAbout !== undefined && (
+          <ListRow
+            label="About Us"
+            value="Team and project"
+            description="Who is building Sanket Vaanni, and what this build does and does not do."
+            icon="info"
+            onPress={onOpenAbout}
+            testID="about-row"
+          />
+        )}
         <AboutRow
           label="App"
-          value={`Sanket Vaanni ${APP_VERSION}`}
+          value={build === null ? `${PRODUCT_NAME}` : `${PRODUCT_NAME} ${build.versionName}`}
           description="An offline-first companion for a two-glove sign-language device."
-          last
+          last={onOpenAdmin === undefined}
         />
+        {onOpenAdmin !== undefined && (
+          <ListRow
+            label="Super Admin"
+            value="Restricted"
+            description="User administration, announcements and maintenance mode."
+            icon="warning"
+            onPress={onOpenAdmin}
+            last
+            testID="admin-row"
+          />
+        )}
       </Card>
 
       <Card sunken style={styles.note}>
         <Icon name="info" size={14} color={palette.textMuted} />
         <AppText variant="caption" color={palette.textMuted} style={styles.noteText}>
-          Every preference here lives in this device's local storage and is removed when the app's
-          data is cleared. Nothing on this screen is uploaded anywhere.
+          {account.isGuest
+            ? 'Every preference here lives in this device’s local storage and is removed when the app’s data is cleared. Nothing on this screen is uploaded anywhere.'
+            : 'Preferences here are stored on this device and synced to your account when a connection is available.'}
         </AppText>
       </Card>
 
@@ -287,6 +460,7 @@ export function MoreScreen({
           onChange={(code) => updatePreferences({ targetLanguageCode: code })}
         />
       </Sheet>
+
     </Screen>
   );
 }
@@ -332,6 +506,24 @@ function AboutRow({
  * in both themes and is built once at module load.
  */
 const styles = StyleSheet.create({
+  /*
+   * The notification row: icon, words, control.
+   *
+   * `alignItems: 'flex-start'` rather than `center` because the description can
+   * wrap to two or three lines — a permanent refusal and a guest's unlinked
+   * token both need a sentence — and centring a three-line paragraph against a
+   * button puts the button in the middle of the text.
+   */
+  pushRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  pushText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
   card: {
     gap: spacing.md,
   },

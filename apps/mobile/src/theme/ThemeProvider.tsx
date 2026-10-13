@@ -18,19 +18,28 @@ import React, {
 } from 'react';
 import { useColorScheme, type ViewStyle } from 'react-native';
 
-import { PALETTES, type ColorScheme, type Palette } from './palette';
+import {
+  PALETTES,
+  resolvePalette,
+  type AccentColorId,
+  type ColorScheme,
+  type Palette,
+} from './palette';
 import type { ThemeMode } from '../app/preferences';
 import type { Storage } from '../storage';
 
-export type { ThemeMode };
+export type { AccentColorId, ThemeMode };
 
 export interface ThemeValue {
   /** The user's stored preference. */
   readonly mode: ThemeMode;
   /** The scheme actually in effect, after resolving `system`. */
   readonly scheme: ColorScheme;
+  /** The active accent colour id (emerald, cyan, violet, azure, amber). */
+  readonly accentColor: AccentColorId;
   readonly palette: Palette;
   readonly setMode: (mode: ThemeMode) => void;
+  readonly setAccentColor: (accent: AccentColorId) => void;
   /**
    * False until the stored preference has been read. The app renders with the
    * default dark palette meanwhile, so there is never a blank frame waiting on
@@ -46,26 +55,33 @@ export interface ThemeProviderProps {
   storage: Storage;
   /** Overrides the initial mode; used by tests to skip the storage read. */
   initialMode?: ThemeMode;
+  /** Overrides the initial accent colour; used by tests. */
+  initialAccentColor?: AccentColorId;
 }
 
 export function ThemeProvider({
   children,
   storage,
   initialMode,
+  initialAccentColor,
 }: ThemeProviderProps): React.JSX.Element {
   const systemScheme = useColorScheme();
   const [mode, setModeState] = useState<ThemeMode>(initialMode ?? 'dark');
+  const [accentColor, setAccentColorState] = useState<AccentColorId>(initialAccentColor ?? 'emerald');
   const [isReady, setIsReady] = useState(initialMode !== undefined);
 
   useEffect(() => {
-    if (initialMode !== undefined) return;
+    if (initialMode !== undefined && initialAccentColor !== undefined) return;
     let cancelled = false;
 
-    storage
-      .getThemeMode()
-      .then((stored) => {
+    Promise.all([
+      initialMode !== undefined ? Promise.resolve(initialMode) : storage.getThemeMode(),
+      initialAccentColor !== undefined ? Promise.resolve(initialAccentColor) : storage.getAccentColor(),
+    ])
+      .then(([storedMode, storedAccent]) => {
         if (cancelled) return;
-        if (stored !== null) setModeState(stored);
+        if (storedMode !== null && storedMode !== undefined) setModeState(storedMode);
+        if (storedAccent !== null && storedAccent !== undefined) setAccentColorState(storedAccent);
         setIsReady(true);
       })
       .catch(() => {
@@ -77,7 +93,7 @@ export function ThemeProvider({
     return () => {
       cancelled = true;
     };
-  }, [storage, initialMode]);
+  }, [storage, initialMode, initialAccentColor]);
 
   const setMode = useCallback(
     (next: ThemeMode) => {
@@ -89,12 +105,28 @@ export function ThemeProvider({
     [storage],
   );
 
+  const setAccentColor = useCallback(
+    (next: AccentColorId) => {
+      setAccentColorState(next);
+      void storage.setAccentColor(next).catch(() => undefined);
+    },
+    [storage],
+  );
+
   const scheme: ColorScheme =
     mode === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : mode;
 
   const value = useMemo<ThemeValue>(
-    () => ({ mode, scheme, palette: PALETTES[scheme], setMode, isReady }),
-    [mode, scheme, setMode, isReady],
+    () => ({
+      mode,
+      scheme,
+      accentColor,
+      palette: resolvePalette(scheme, accentColor),
+      setMode,
+      setAccentColor,
+      isReady,
+    }),
+    [mode, scheme, accentColor, setMode, setAccentColor, isReady],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

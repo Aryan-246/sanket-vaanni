@@ -76,4 +76,51 @@ jest.mock('@react-native-async-storage/async-storage', () => {
 // Timers used by the mock transport are disposed explicitly by each test
 // (`transport.dispose()`), so no global cleanup hook is needed here — and
 // `afterEach` is not defined at this point in Jest's lifecycle anyway
-// (use `setupFilesAfterEnv` for that).
+// (use `setupFilesAfterEach` for that).
+
+/**
+ * Firebase, modelled as *a build with no Firebase configured*.
+ *
+ * This is the default rather than a stub that pretends to work, and the choice
+ * matters. `getApps()` returning an empty list is exactly what the real SDK
+ * returns when `google-services.json` was never applied, so every test that
+ * renders the app exercises the same path a build without push configuration
+ * takes: `PushController` reports that push is unavailable, attaches no
+ * listeners, and asks the platform for nothing.
+ *
+ * That keeps three things true at once. No test starts depending on push
+ * working. No test can accidentally prompt for a notification permission. And
+ * the "unavailable" branch — which is the branch a developer running from a
+ * fresh clone will actually hit — is exercised by every single test rather than
+ * only by the ones written for it.
+ *
+ * Tests that need push to be present inject a bridge into `PushController`
+ * directly; they do not need this mock changed.
+ */
+jest.mock('@react-native-firebase/app', () => ({
+  __esModule: true,
+  getApps: jest.fn(() => []),
+  getApp: jest.fn(() => {
+    throw new Error('No Firebase App "[DEFAULT]" has been created');
+  }),
+}));
+
+jest.mock('@react-native-firebase/messaging', () => ({
+  __esModule: true,
+  // The real enum values. Only AUTHORIZED and PROVISIONAL mean granted.
+  AuthorizationStatus: {
+    NOT_DETERMINED: -1,
+    DENIED: 0,
+    AUTHORIZED: 1,
+    PROVISIONAL: 2,
+  },
+  getMessaging: jest.fn(() => ({})),
+  isSupported: jest.fn(async () => false),
+  requestPermission: jest.fn(async () => 0),
+  getToken: jest.fn(async () => 'mock-token'),
+  deleteToken: jest.fn(async () => undefined),
+  onMessage: jest.fn(() => () => undefined),
+  onTokenRefresh: jest.fn(() => () => undefined),
+  onNotificationOpenedApp: jest.fn(() => () => undefined),
+  getInitialNotification: jest.fn(async () => null),
+}));

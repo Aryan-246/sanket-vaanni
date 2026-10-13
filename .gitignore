@@ -73,3 +73,15 @@ desktop.ini
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# ---- Local scratch, captures & recovery -----------------------------------
+.recovery/
+.claude/
+*.jpeg
+apps/mobile/screen_*.png
+apps/mobile/screenshot_*.png
+apps/mobile/android/app/src/main/assets/index.android.bundle
+/package.json
+/package-lock.json
+
+

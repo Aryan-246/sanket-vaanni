@@ -1,5 +1,5 @@
 /**
- * Root flow: the launch gate and the four-tab navigation.
+ * Root flow: the launch gate and the five-tab navigation.
  *
  * These tests exercise real routing and real state, not a mocked navigator.
  *
@@ -20,8 +20,10 @@ import { createIntroSession } from '../src/app/launchSession';
 import {
   AUDIT_MARKER,
   DASHBOARD_MARKER,
+  HISTORY_MARKER,
   MORE_MARKER,
   OLED_MARKER,
+  TEXTBOARD_MARKER,
   VIDEO_MARKER,
   has,
   pressByLabel,
@@ -70,7 +72,7 @@ describe('launch gate', () => {
 });
 
 describe('navigation', () => {
-  it('reaches all four destinations from the tab bar', async () => {
+  it('reaches every destination from the tab bar', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
 
     expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
@@ -78,30 +80,43 @@ describe('navigation', () => {
     await pressByLabel(renderer, 'OLED');
     expect(has(renderer, OLED_MARKER)).toBe(true);
 
-    await pressByLabel(renderer, 'Audit');
-    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+    await pressByLabel(renderer, 'Textboard');
+    expect(has(renderer, TEXTBOARD_MARKER)).toBe(true);
 
-    await pressByLabel(renderer, 'More');
+    await pressByLabel(renderer, 'History');
+    expect(has(renderer, HISTORY_MARKER)).toBe(true);
+
+    await pressByLabel(renderer, 'Settings');
     expect(has(renderer, MORE_MARKER)).toBe(true);
 
     await pressByLabel(renderer, 'Dashboard');
     expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
 
+    /*
+     * The Audit readout is deliberately not a tab. It is a diagnostic detail
+     * screen pushed from Settings, so it is reached the way a reader reaches
+     * it — and it is checked last, because a pushed screen hides the tab bar.
+     */
+    await pressByLabel(renderer, 'Settings');
+    await pressByLabel(renderer, 'Component status');
+    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+
     await teardown(renderer);
   });
 
   it('mounts only the active destination', async () => {
-    // The performance decision, asserted rather than assumed: four mounted
+    // The performance decision, asserted rather than assumed: five mounted
     // screens would keep the Dashboard's sensor subscription re-rendering while
-    // the user is reading the audit.
+    // the user is reading these settings.
     const { renderer } = await renderApp({ skipIntro: true });
 
-    await pressByLabel(renderer, 'Audit');
+    await pressByLabel(renderer, 'Settings');
 
-    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+    expect(has(renderer, MORE_MARKER)).toBe(true);
     expect(has(renderer, DASHBOARD_MARKER)).toBe(false);
     expect(has(renderer, OLED_MARKER)).toBe(false);
-    expect(has(renderer, MORE_MARKER)).toBe(false);
+    expect(has(renderer, AUDIT_MARKER)).toBe(false);
+
 
     await teardown(renderer);
   });
@@ -110,7 +125,7 @@ describe('navigation', () => {
     const { renderer, session } = await renderApp({ skipIntro: true });
 
     await pressByLabel(renderer, 'OLED');
-    await pressByLabel(renderer, 'More');
+    await pressByLabel(renderer, 'Settings');
 
     expect(textOf(renderer)).not.toContain(VIDEO_MARKER);
     expect(session.shouldPlayIntro()).toBe(false);
@@ -118,11 +133,11 @@ describe('navigation', () => {
     await teardown(renderer);
   });
 
-  it('replays the intro from More, even though this launch already showed it', async () => {
+  it('replays the intro from Settings, even though this launch already showed it', async () => {
     // Replay is an explicit user action, so it must not be filtered by the gate.
     const { renderer } = await renderApp({ skipIntro: true });
 
-    await pressByLabel(renderer, 'More');
+    await pressByLabel(renderer, 'Settings');
     await pressByTestId(renderer, 'replay-intro-row');
 
     expect(textOf(renderer)).toContain(VIDEO_MARKER);
@@ -156,15 +171,15 @@ describe('Android back', () => {
     const back = captureBackHandler();
     const { renderer } = await renderApp({ skipIntro: true });
 
-    await pressByLabel(renderer, 'Audit');
-    expect(has(renderer, AUDIT_MARKER)).toBe(true);
+    await pressByLabel(renderer, 'Settings');
+    expect(has(renderer, MORE_MARKER)).toBe(true);
 
     await ReactTestRenderer.act(async () => {
       expect(back.invoke()).toBe(true);
     });
 
     expect(has(renderer, DASHBOARD_MARKER)).toBe(true);
-    expect(has(renderer, AUDIT_MARKER)).toBe(false);
+    expect(has(renderer, MORE_MARKER)).toBe(false);
 
     await teardown(renderer);
   });

@@ -229,7 +229,7 @@ describe('the recognition panel', () => {
       'simulated',
     );
 
-    expect(output).toContain('Demo Mode');
+    expect(output).toContain('Demo');
     for (const claim of ['accurate', 'accuracy', 'correct', 'proven']) {
       expect(output.toLowerCase()).not.toContain(claim);
     }
@@ -494,8 +494,10 @@ describe('the Dashboard as a whole', () => {
     // is `unavailable` rather than `idle`, because no model exists at all —
     // which is the honest answer and not the same as "waiting".
     expect(output).toContain('No glove connected');
-    expect(output).toContain('Not implemented');
-    expect(output).toContain('Not available');
+    // The empty card distinguishes "nothing has been signed" from "this build
+    // cannot read signs", which "Not implemented" did not.
+    expect(output).toContain('Recognition is not available');
+    expect(output).toContain('Neither exists in this build yet');
     expect(output).not.toMatch(ANY_PERCENTAGE);
     expect(output).not.toContain('Hardware');
     expect(output).not.toContain('Connected to');
@@ -559,7 +561,7 @@ describe('the Dashboard as a whole', () => {
 
     const output = renderedText(renderer);
 
-    expect(output).toContain('Demo Mode');
+    expect(output).toContain('Demo');
     expect(output).toContain('simulated');
     expect(output).not.toContain('Hardware');
     // The sentinel is an implementation detail and must never be on screen.
@@ -595,7 +597,8 @@ describe('the Dashboard as a whole', () => {
 describe('the Audit screen', () => {
   it('reports nothing as healthy, because nothing has reported anything', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
-    await pressByLabel(renderer, 'Audit');
+    await pressByLabel(renderer, 'Settings');
+    await pressByLabel(renderer, 'Component status');
     const output = renderedText(renderer);
 
     expect(output).not.toContain('Healthy');
@@ -611,7 +614,8 @@ describe('the Audit screen', () => {
 
   it('names every component the firmware has not reported on', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
-    await pressByLabel(renderer, 'Audit');
+    await pressByLabel(renderer, 'Settings');
+    await pressByLabel(renderer, 'Component status');
 
     // The rows sit behind their group headings, so the test opens them the way
     // a reader does. That it has to is the point: the collapsed screen is the
@@ -653,7 +657,8 @@ describe('the Audit screen', () => {
 
   it('opens with every group closed, and says how many rows each holds', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
-    await pressByLabel(renderer, 'Audit');
+    await pressByLabel(renderer, 'Settings');
+    await pressByLabel(renderer, 'Component status');
     const output = renderedText(renderer);
 
     // The diagnostic areas are named on the collapsed screen — that is what
@@ -671,7 +676,8 @@ describe('the Audit screen', () => {
 
   it('names the areas that need attention rather than only counting states', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
-    await pressByLabel(renderer, 'Audit');
+    await pressByLabel(renderer, 'Settings');
+    await pressByLabel(renderer, 'Component status');
     const output = renderedText(renderer);
 
     // Nothing is faulty on a fresh install, and the summary says exactly that
@@ -684,7 +690,8 @@ describe('the Audit screen', () => {
 
   it('offers a refresh that re-reads, and does not offer to connect', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
-    await pressByLabel(renderer, 'Audit');
+    await pressByLabel(renderer, 'Settings');
+    await pressByLabel(renderer, 'Component status');
 
     expect(renderedText(renderer)).toContain('Refresh diagnostics');
 

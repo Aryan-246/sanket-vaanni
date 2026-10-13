@@ -1,5 +1,9 @@
 import { Platform } from 'react-native';
-import { API_BASE_URL as ENV_API_BASE_URL } from '@env';
+import {
+  API_BASE_URL as ENV_API_BASE_URL,
+  SUPABASE_PUBLISHABLE_KEY as ENV_SUPABASE_PUBLISHABLE_KEY,
+  SUPABASE_URL as ENV_SUPABASE_URL,
+} from '@env';
 
 /**
  * Runtime configuration, resolved once at module load.
@@ -32,6 +36,22 @@ function resolveApiBaseUrl(): string | null {
   return __DEV__ ? DEV_FALLBACK_BASE_URL : null;
 }
 
+function resolveSupabaseUrl(): string | null {
+  const fromEnv = ENV_SUPABASE_URL;
+  if (typeof fromEnv === 'string' && fromEnv.trim().length > 0) {
+    return normaliseBaseUrl(fromEnv);
+  }
+  return null;
+}
+
+function resolveSupabasePublishableKey(): string | null {
+  const fromEnv = ENV_SUPABASE_PUBLISHABLE_KEY;
+  if (typeof fromEnv === 'string' && fromEnv.trim().length > 0) {
+    return fromEnv.trim();
+  }
+  return null;
+}
+
 export const config = {
   apiBaseUrl: resolveApiBaseUrl(),
   /** True when no backend URL is configured (production without `.env`). */
@@ -40,6 +60,13 @@ export const config = {
   },
   /** How long a backend request may take before it is abandoned. */
   apiTimeoutMs: 8000,
+
+  /** Supabase client-side configuration. */
+  supabaseUrl: resolveSupabaseUrl(),
+  supabasePublishableKey: resolveSupabasePublishableKey(),
+  get isSupabaseConfigured(): boolean {
+    return config.supabaseUrl !== null && config.supabasePublishableKey !== null;
+  },
 } as const;
 
 export type AppConfig = typeof config;

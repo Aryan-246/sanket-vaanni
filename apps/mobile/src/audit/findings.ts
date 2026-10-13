@@ -554,8 +554,20 @@ export interface AppAuditInput {
   readonly recognition: RecognitionOutcome;
   /** Human name of the configured output language, for the speech row. */
   readonly targetLanguageName: string;
-  /** True when the chosen output language has a TTS engine wired up. */
-  readonly targetLanguageSpeechWired: boolean;
+  /** BCP-47 tag the speech engine would be asked for. */
+  readonly targetLanguageSpeechTag: string;
+  /**
+   * Whether the *device* has voice data installed for that tag.
+   *
+   * `null` means the question has not been answered yet — the engine is queried
+   * asynchronously, and until it replies the honest state is `unknown`. It is
+   * deliberately not a boolean defaulted to `false`, because "we have not
+   * checked" and "this phone cannot speak Hindi" are different facts and only
+   * one of them is a problem.
+   */
+  readonly targetLanguageVoiceInstalled: boolean | null;
+  /** The engine's own explanation when the voice is missing. */
+  readonly targetLanguageVoiceReason: string | null;
 }
 
 /** Findings that are about the app rather than about one glove. */
@@ -598,10 +610,18 @@ export function appFindings(input: AppAuditInput): Finding[] {
       key: 'app.speech-language',
       group: 'language',
       label: 'Speech language coverage',
-      state: input.targetLanguageSpeechWired ? 'healthy' : 'unavailable',
-      detail: input.targetLanguageSpeechWired
-        ? `A voice is wired up for ${input.targetLanguageName}.`
-        : `No voice is wired up for ${input.targetLanguageName}, the configured output language. Android may well ship one; this build has no speech engine at all, so it can neither use nor rule one out. Preference: speech ${preferences.voiceEnabled ? 'on' : 'off'}.`,
+      state:
+        input.targetLanguageVoiceInstalled === true
+          ? 'healthy'
+          : input.targetLanguageVoiceInstalled === false
+            ? 'unavailable'
+            : 'unknown',
+      detail:
+        input.targetLanguageVoiceInstalled === true
+          ? `This device has a voice installed for ${input.targetLanguageName} (${input.targetLanguageSpeechTag}).`
+          : input.targetLanguageVoiceInstalled === false
+            ? `This device has no voice installed for ${input.targetLanguageName} (${input.targetLanguageSpeechTag}). ${input.targetLanguageVoiceReason ?? ''} Speech in this language will fail until the voice data is installed.`
+            : `Whether this device has a voice for ${input.targetLanguageName} (${input.targetLanguageSpeechTag}) has not been established yet. Preference: speech ${preferences.voiceEnabled ? 'on' : 'off'}.`,
     },
     {
       key: 'app.bluetooth',

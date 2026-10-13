@@ -28,6 +28,10 @@ export const OLED_MARKER = 'oled-screen';
 export const AUDIT_MARKER = 'audit-screen';
 /** A string only More's root `Screen` renders. */
 export const MORE_MARKER = 'more-screen';
+/** A string only the Textboard's root `Screen` renders. */
+export const TEXTBOARD_MARKER = 'textboard-screen';
+/** A string only the History screen's root `Screen` renders. */
+export const HISTORY_MARKER = 'history-screen';
 /** The native video host component, as mocked in `jest.setup.js`. */
 export const VIDEO_MARKER = '"Video"';
 

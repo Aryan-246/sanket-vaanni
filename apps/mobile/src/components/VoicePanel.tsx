@@ -5,6 +5,7 @@ import { AppText } from './AppText';
 import { Badge } from './Badge';
 import { Card } from './Card';
 import { Icon } from './Icon';
+import { SpeechOutputWaveform } from './SpeechOutputWaveform';
 import { Toggle } from './Toggle';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
@@ -20,6 +21,16 @@ export interface VoicePanelProps {
   /** Text that would be spoken, or null when nothing has been recognised. */
   phrase: string | null;
   /**
+   * True while the device is genuinely producing audio.
+   *
+   * The panel does not offer a play button — a switch is the right control for a
+   * mode that stays on, and a play button beside a switch invites the reading
+   * that the switch does nothing. What it does instead is *report* the state the
+   * switch produces: while the toggle is on and the phone is talking, the badge
+   * says so.
+   */
+  speaking?: boolean;
+  /**
    * Draw the panel's own "Voice" heading. Set false when the caller already
    * renders a `SectionHeader` for this section, so the word is not printed
    * twice. The status badge is drawn either way.
@@ -31,28 +42,7 @@ export interface VoicePanelProps {
 /**
  * Voice output, in two clearly separated halves.
  *
- * ## The deliberate contradiction
- *
- * The toggle records *intent*; the speaker reports *capability*. Those can
- * disagree, and today they always do — the preference can be on while no speech
- * engine exists. The panel shows both at once rather than resolving the
- * disagreement silently:
- *
- *  - turning it on does not disable itself or snap back;
- *  - the status line immediately says it cannot run, and why.
- *
- * The alternative — greying the toggle out — was rejected because it hides the
- * feature's existence, and because "the user asked for this and it is not
- * available" is more informative than "this control is unavailable".
- *
- * ## Why the glove's speaker is not beside the phone's
- *
- * They are different outputs on different hardware. The phone speaks through
- * Android's TTS engine; the glove would speak through a speaker on the glove,
- * driven over a BLE command protocol that does not exist yet. Presenting them as
- * one setting would imply that turning the phone's voice on did something to the
- * glove. The second row is therefore permanently `Coming soon` and is not a
- * control — there is nothing to switch.
+ * Integrated with the approved 36-bar luminous audio waveform from Google Stitch.
  */
 export function VoicePanel({
   enabled,
@@ -60,6 +50,7 @@ export function VoicePanel({
   available,
   unavailableReason,
   phrase,
+  speaking = false,
   showTitle = true,
   testID,
 }: VoicePanelProps): React.JSX.Element {
@@ -73,20 +64,20 @@ export function VoicePanel({
       {/*
         The panel titles itself on the Dashboard, where it is the whole of that
         subject. On a settings screen it sits under a `SectionHeader` that
-        already says "Voice", and drawing the word twice thirty points apart is
+        already says "Speech output", and drawing the phrase twice so close is
         the duplication this flag removes. The badge stays in both cases: it is
         the state, not the label.
       */}
       {showTitle ? (
         <View style={styles.headerRow}>
           <AppText variant="overline" overline color={palette.textMuted}>
-            Voice
+            Speech output
           </AppText>
-          <VoiceStatusBadge enabled={enabled} blocked={blocked} />
+          <VoiceStatusBadge enabled={enabled} blocked={blocked} speaking={speaking} />
         </View>
       ) : (
         <View style={styles.headerRowEnd}>
-          <VoiceStatusBadge enabled={enabled} blocked={blocked} />
+          <VoiceStatusBadge enabled={enabled} blocked={blocked} speaking={speaking} />
         </View>
       )}
 
@@ -104,6 +95,14 @@ export function VoicePanel({
           accessibilityHint="Turns text-to-speech for recognised phrases on or off"
         />
       </View>
+
+      {/* Approved 36-bar standalone speech waveform */}
+      <SpeechOutputWaveform
+        enabled={enabled}
+        speaking={speaking}
+        blocked={blocked}
+        testID="speech-output-waveform"
+      />
 
       {blocked && (
         <View style={[styles.notice, { backgroundColor: palette.warningSurface }]}>
@@ -158,10 +157,15 @@ export function VoicePanel({
 function VoiceStatusBadge({
   enabled,
   blocked,
+  speaking,
 }: {
   enabled: boolean;
   blocked: boolean;
+  speaking: boolean;
 }): React.JSX.Element {
+  // `Speaking` outranks `Ready`: both are true while audio plays, and the one
+  // the user can hear is the one worth naming.
+  if (speaking) return <Badge label="Speaking" tone="accent" dot />;
   if (!enabled) return <Badge label="Off" tone="neutral" dot />;
   if (blocked) return <Badge label="Unavailable" tone="warning" dot />;
   return <Badge label="Ready" tone="success" dot />;

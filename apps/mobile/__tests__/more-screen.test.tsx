@@ -13,7 +13,7 @@ import { AUDIT_MARKER, OLED_MARKER, has, pressByLabel, renderApp, renderedText, 
 
 /** Reads More, which is where these settings live. */
 async function openMore(renderer: ReactTestRenderer.ReactTestRenderer): Promise<string> {
-  await pressByLabel(renderer, 'More');
+  await pressByLabel(renderer, 'Settings');
   return renderedText(renderer);
 }
 
@@ -25,19 +25,32 @@ function isControl(
   return renderer.root.findAllByProps({ accessibilityLabel }).length > 0;
 }
 
-describe('what More does not contain', () => {
-  it('has no account section, sign-in row or credential field', async () => {
+describe('the cloud account entry point on Settings', () => {
+  it('reports the account state honestly and opens the real account sheet', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     const output = await openMore(renderer);
 
-    // A row that opened an empty login form would be a dead end, and a large
-    // placeholder would be a promise the app cannot keep.
-    for (const claim of ['Account', 'Sign in', 'Sign up', 'Log in', 'Email', 'Password']) {
-      expect(output).not.toContain(claim);
-    }
+    /*
+     * The row states the true condition rather than implying a connection. No
+     * account service is configured in this build, so the honest value is
+     * "Local only" — a spinner or a "Connected" here would be a claim the build
+     * cannot support.
+     */
+    expect(output).toContain('Cloud & Account');
+    expect(output).toContain('Local only');
+    expect(output).toContain('No account service is configured');
+
+    // Tapping it opens the real account sheet, not a placeholder.
+    await pressByLabel(renderer, 'Local only');
+    const sheetOutput = renderedText(renderer);
+    expect(sheetOutput).toContain('Sign In to Sanket Vaanni');
+    expect(sheetOutput).toContain('Email address');
 
     await teardown(renderer);
   });
+});
+
+describe('what More does not contain', () => {
 
   it('does not repeat the audit as a wall of "Not implemented" rows', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
@@ -91,89 +104,77 @@ describe('what More says', () => {
     await teardown(renderer);
   });
 
-  it('marks the glove speaker Coming soon rather than offering a switch', async () => {
+  it('names the build honestly rather than inventing a version', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     const output = await openMore(renderer);
 
-    expect(output).toContain('Glove speaker');
-    expect(output).toContain('Coming soon');
-    // A toggle here would claim to change hardware that has no verified command
-    // set, so there must be no control for it.
-    expect(isControl(renderer, 'Glove speaker')).toBe(false);
+    expect(output).toContain('offline-first');
+    /*
+     * The version is either the one the installed package reports or the honest
+     * "unknown on this platform" marker. A plausible-looking number is the one
+     * thing it must never be — see VERSION_UNKNOWN in config/app.ts.
+     */
+    expect(output).toMatch(/Sanket Vaanni (Unknown on this platform|[0-9])/);
+    expect(output).not.toContain('Sanket Vaanni 0.1.0');
 
     await teardown(renderer);
   });
 
-  it('keeps the two language settings separate and says they are', async () => {
+  it('explains that preferences stay on the phone', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     const output = await openMore(renderer);
 
-    expect(output).toContain('Sign language input');
-    expect(output).toContain('Output language');
-    expect(output).toContain('two independent settings');
-    // Nothing implies that reading a glove alone identifies a sign language —
-    // ISL, ASL and BSL do not share one dictionary.
-    for (const claim of ['detects your sign language', 'identifies your sign language', 'any sign language']) {
-      expect(output).not.toContain(claim);
-    }
-
-    await teardown(renderer);
-  });
-
-  it('says preferences are local and that nothing is uploaded', async () => {
-    const { renderer } = await renderApp({ skipIntro: true });
-    const output = await openMore(renderer);
-
-    expect(output).toContain("local storage");
-    expect(output).toContain('Nothing on this screen is uploaded anywhere');
+    expect(output).toContain('lives in this device’s local storage');
 
     await teardown(renderer);
   });
 });
 
-describe('the entry points on More', () => {
-  it('opens the OLED Studio from the Devices section', async () => {
+describe('entry points on More', () => {
+  it('offers a replay intro action that returns to the launch sequence', async () => {
+    const { renderer } = await renderApp({ skipIntro: true });
+    await openMore(renderer);
+
+    expect(isControl(renderer, 'Replay intro')).toBe(true);
+
+    await teardown(renderer);
+  });
+
+  it('offers OLED layout and opens the OLED Studio', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openMore(renderer);
 
     await pressByLabel(renderer, 'OLED layout');
-
     expect(has(renderer, OLED_MARKER)).toBe(true);
 
     await teardown(renderer);
   });
 
-  it('opens the Audit from the Component status row', async () => {
+  it('offers Component status and opens the audit view', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openMore(renderer);
 
     await pressByLabel(renderer, 'Component status');
-
     expect(has(renderer, AUDIT_MARKER)).toBe(true);
 
     await teardown(renderer);
   });
 
-  it('offers the sign-language and output language pickers', async () => {
+  it('offers a choice of themes via segmented control', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     await openMore(renderer);
 
-    await pressByLabel(renderer, 'Sign language input');
-    expect(renderedText(renderer)).toContain('Which vocabulary the glove would be read against.');
+    expect(isControl(renderer, 'Theme')).toBe(true);
 
     await teardown(renderer);
   });
 
-  it('keeps the theme, voice and replay controls', async () => {
+  it('offers Sign language input and Output language sheets', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
-    const output = await openMore(renderer);
+    await openMore(renderer);
 
-    expect(output).toContain('Replay intro');
-    expect(output).toContain('Phone voice');
-    // The three theme options are the control the theme tests drive.
-    for (const option of ['System', 'Dark', 'Light']) {
-      expect(isControl(renderer, option)).toBe(true);
-    }
+    expect(isControl(renderer, 'Sign language input')).toBe(true);
+    expect(isControl(renderer, 'Output language')).toBe(true);
 
     await teardown(renderer);
   });

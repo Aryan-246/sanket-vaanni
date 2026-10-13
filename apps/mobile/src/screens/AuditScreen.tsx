@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { ActionButton } from '../components/ActionButton';
@@ -7,11 +7,12 @@ import { Badge } from '../components/Badge';
 import { Card } from '../components/Card';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { Icon } from '../components/Icon';
+import { DetailHeader } from '../components/DetailHeader';
 import { Screen } from '../components/Screen';
-import { ScreenHeader } from '../components/ScreenHeader';
 import { StateChip } from '../components/StateChip';
 import { useAppState, useGlove, useLiveTranslation } from '../app/AppState';
 import { findOutputLanguage } from '../app/preferences';
+import { DeviceSpeaker } from '../speech/nativeSpeaker';
 import {
   appFindings,
   describeSummary,
@@ -75,7 +76,7 @@ const SIDES: readonly GloveSide[] = ['left', 'right'];
  * for those `retry()` is exactly a re-read. It issues no command to any device
  * and starts no scan.
  */
-export function AuditScreen(): React.JSX.Element {
+export function AuditScreen({ onClose }: { onClose: () => void }): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
   const { controllers, profile, calibration, speaker, translator, preferences } = useAppState();
@@ -106,6 +107,50 @@ export function AuditScreen(): React.JSX.Element {
   );
 
   const targetLanguage = findOutputLanguage(preferences.targetLanguageCode);
+  const speechTag = targetLanguage?.speechTag ?? 'en-IN';
+
+  /**
+   * Whether this device actually has a voice for the configured language.
+   *
+   * Asked of the speech engine rather than asserted by the app, because it is a
+   * fact about the phone's installed voice data and not about this build. The
+   * result is `null` until the engine answers, which the findings render as
+   * `unknown` rather than as a failure.
+   */
+  const [voiceInstalled, setVoiceInstalled] = useState<{
+    installed: boolean | null;
+    reason: string | null;
+  }>({ installed: null, reason: null });
+  const [voiceCheckedFor, setVoiceCheckedFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!(speaker instanceof DeviceSpeaker)) return;
+    if (voiceCheckedFor === speechTag) return;
+
+    let cancelled = false;
+    const speakerForCheck = speaker;
+
+    void speakerForCheck
+      .checkLanguage(speechTag)
+      .then((result) => {
+        if (cancelled) return;
+        setVoiceInstalled({ installed: result.available, reason: result.reason ?? null });
+        setVoiceCheckedFor(speechTag);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setVoiceInstalled({
+          installed: false,
+          reason: error instanceof Error ? error.message : 'The language check failed.',
+        });
+        setVoiceCheckedFor(speechTag);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [speaker, speechTag, voiceCheckedFor]);
+
   const app = useMemo(
     () =>
       appFindings({
@@ -116,9 +161,21 @@ export function AuditScreen(): React.JSX.Element {
         recognition: outcome,
         targetLanguageName:
           targetLanguage?.name ?? preferences.targetLanguageCode.toUpperCase(),
-        targetLanguageSpeechWired: targetLanguage?.speechWired ?? false,
+        targetLanguageSpeechTag: speechTag,
+        targetLanguageVoiceInstalled: voiceInstalled.installed,
+        targetLanguageVoiceReason: voiceInstalled.reason,
       }),
-    [outcome, preferences, profile, speaker, targetLanguage, translator],
+    [
+      outcome,
+      preferences,
+      profile,
+      speaker,
+      speechTag,
+      targetLanguage,
+      translator,
+      voiceInstalled.installed,
+      voiceInstalled.reason,
+    ],
   );
 
   const everything = useMemo(
@@ -160,8 +217,9 @@ export function AuditScreen(): React.JSX.Element {
         had seen a single row. The summary card is where it belongs: that is where
         "worst of N" gives it a meaning.
       */}
-      <ScreenHeader
+      <DetailHeader
         title="Audit"
+        onClose={onClose}
         subtitle="What each part reports, and what nothing has reported"
       />
 

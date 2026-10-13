@@ -10,6 +10,16 @@ const testConfig: AppConfig = {
   host: '127.0.0.1',
   port: 0,
   logLevel: 'silent',
+  // A complete `smtp` block, and deliberately a useless one. `AppConfig` requires
+  // it, and the test suite must never be the thing that reaches a real mail
+  // server: `buildApp` skips email initialisation entirely under `nodeEnv:
+  // 'test'`, and these values would fail to connect anyway.
+  smtp: {
+    host: 'smtp.invalid',
+    port: 465,
+    secure: true,
+    from: 'Sanket Vaanni <test@invalid>',
+  },
 };
 
 describe('GET /health', () => {

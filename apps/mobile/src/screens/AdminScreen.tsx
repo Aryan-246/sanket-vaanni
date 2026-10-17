@@ -241,9 +241,7 @@ export function AdminScreen({
 
       <Card sunken style={styles.notice}>
         <AppText variant="caption" color={palette.textMuted}>
-          Every action on this screen is recorded with your account, the time, and the reason you
-          give. The record cannot be edited or deleted afterwards — by you, or by anyone else.
-          {user?.email ? ` Signed in as ${user.email}.` : ''}
+          Every action is recorded with your account, timestamp and reason. Audit log cannot be edited or deleted.
         </AppText>
       </Card>
 
@@ -593,14 +591,14 @@ function PeopleSection(): React.JSX.Element {
 
   return (
     <View style={styles.section}>
-      <SectionHeader label="Accounts" detail={total > 0 ? `${total} in total` : undefined} />
+      <SectionHeader label="Accounts" detail={total > 0 ? `${total} total` : undefined} />
 
       <TextField
         label="Search"
         value={query}
         onChangeText={setQuery}
-        placeholder="Email or display name"
-        hint="Searches accounts only. Message and recognition content is not searchable from here."
+        placeholder="Email or name"
+        hint="Accounts only"
         autoCapitalize="none"
         autoCorrect={false}
       />
@@ -617,21 +615,16 @@ function PeopleSection(): React.JSX.Element {
       />
 
       {error ? <Failure failure={error} onRetry={() => { void load(1, true); }} /> : null}
-      {users === null && error === null ? <Loading label="Reading accounts" /> : null}
+      {users === null && error === null ? <Loading label="Loading accounts..." /> : null}
 
       {selected.length > 0 ? (
         <Card sunken>
           <SectionHeader
             label={`${selected.length} selected`}
-            detail={`Suspend or restore ${selected.length === 1 ? 'this account' : 'these accounts'} together. Each account is recorded separately in the audit log, and the result says how many were actually changed.`}
+            detail={`Suspend or restore. Each recorded separately.`}
           />
 
-          {/*
-           * The selection, named. The heading counts them; this says who they
-           * are, so a box ticked three scrolls ago is still visible at the point
-           * the irreversible button is pressed.
-           */}
-          <AppText variant="body" color={palette.textSecondary} testID="bulk-selection-names">
+          <AppText variant="caption" color={palette.textMuted} testID="bulk-selection-names">
             {selectionNote}
           </AppText>
 
@@ -639,8 +632,8 @@ function PeopleSection(): React.JSX.Element {
             label="Reason"
             value={bulkReason}
             onChangeText={setBulkReason}
-            placeholder="Why these accounts, together"
-            hint="Stored against each account, so one account's history explains itself without the others."
+            placeholder="Why"
+            hint="Required for audit"
             multiline
           />
           {overCap ? (
@@ -665,22 +658,22 @@ function PeopleSection(): React.JSX.Element {
           ) : null}
           <View style={styles.actions}>
             <ActionButton
-              label="Suspend selected"
+              label="Suspend"
               tone="danger"
               busy={bulkBusy}
               disabled={bulkReason.trim().length < 3 || overCap !== null}
-              hint="Your own account is refused, and so is a selection that would leave no active administrator. Suspend does not delete anything."
+              hint="Accounts locked out. Not deleted."
               onPress={() => setConfirmingBulk('suspend')}
             />
             <ActionButton
-              label="Restore selected"
+              label="Restore"
               tone="secondary"
               busy={bulkBusy}
               disabled={bulkReason.trim().length < 3 || overCap !== null}
               onPress={() => setConfirmingBulk('restore')}
             />
             <ActionButton
-              label="Clear selection"
+              label="Clear"
               tone="ghost"
               disabled={bulkBusy}
               onPress={() => setSelected([])}
@@ -2054,7 +2047,7 @@ function OverviewSection({
             accessibilityLabel="Re-read the overview"
           />
         }
-        detail="Counted by the backend just now, from the accounts, notices and audit tables."
+        detail="Real-time counts from backend"
       />
 
       {error ? <Failure failure={error} onRetry={refresh} /> : null}
@@ -2092,7 +2085,7 @@ function OverviewSection({
             <View style={styles.itemHead}>
               <AppText variant="label">Accounts</AppText>
               <ActionButton
-                label="Open"
+                label="Manage"
                 tone="ghost"
                 compact
                 onPress={() => onOpen('people')}
@@ -2103,66 +2096,66 @@ function OverviewSection({
               <Figure
                 value={figures.users.total}
                 label="Total"
-                note="Every row in profiles, whatever its status."
+                note="All profiles"
               />
               <Figure
                 value={figures.users.active}
                 label="Active"
-                note="profiles with status active."
+                note="Can sign in"
               />
               <Figure
                 value={figures.users.suspended}
                 label="Suspended"
-                note="profiles with status suspended."
+                note="Locked out"
               />
               <Figure
                 value={figures.users.admins}
-                label="Administrators"
-                note="profiles with role admin, active or not."
+                label="Admins"
+                note="Any status"
               />
               <Figure
                 value={figures.users.activeAdmins}
-                label="Administrators who can sign in"
-                note="role admin and status active. The number that matters for access."
+                label="Active admins"
+                note="Can access console"
               />
             </View>
           </Card>
 
           <Card>
             <View style={styles.itemHead}>
-              <AppText variant="label">Notices</AppText>
+              <AppText variant="label">Announcements</AppText>
               <ActionButton
-                label="Open"
+                label="Manage"
                 tone="ghost"
                 compact
                 onPress={() => onOpen('announcements')}
-                accessibilityLabel="Open the notices list"
+                accessibilityLabel="Open the announcements list"
               />
             </View>
             <View style={styles.tiles}>
               <Figure
                 value={figures.announcements.live}
                 label="Live"
-                note="Published, and not yet past their expiry. What users can see."
+                note="Visible to users"
               />
               <Figure
                 value={figures.announcements.drafts}
                 label="Drafts"
-                note="Saved but not published. No user can see these."
+                note="Not published"
               />
               <Figure
                 value={figures.announcements.expired}
                 label="Expired"
-                note="Published once, past the expiry they were given. Counted separately from live."
+                note="Past end date"
               />
             </View>
           </Card>
 
           <Card>
             <View style={styles.itemHead}>
-              <AppText variant="label">Administrator actions, last 24 hours</AppText>
+              <AppText variant="label">Actions (24h)</AppText>
               <ActionButton
-                label="Open"
+                label="View log"
                 tone="ghost"
                 compact
                 onPress={() => onOpen('audit')}
@@ -2172,13 +2165,13 @@ function OverviewSection({
             <View style={styles.tiles}>
               <Figure
                 value={figures.audit.succeeded24h}
-                label="Completed"
-                note="Audit entries whose outcome is succeeded. One entry per action."
+                label="Succeeded"
+                note="Completed"
               />
               <Figure
                 value={figures.audit.failed24h}
-                label="Refused or failed"
-                note="Audit entries whose outcome is failed."
+                label="Failed"
+                note="Refused"
               />
             </View>
           </Card>
@@ -2940,8 +2933,8 @@ const makeStyles = (palette: Palette) =>
       gap: spacing.xs,
     },
     section: {
-      gap: spacing.sm,
-      paddingTop: spacing.md,
+      gap: spacing.md,
+      paddingTop: spacing.lg,
     },
     /**
      * The overview's figures.
@@ -2953,15 +2946,15 @@ const makeStyles = (palette: Palette) =>
     tiles: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      gap: spacing.md,
+      gap: spacing.lg,
     },
     tile: {
       flexGrow: 1,
       flexBasis: 132,
-      gap: 1,
+      gap: spacing.sm,
     },
     item: {
-      gap: spacing.xs,
+      gap: spacing.sm,
     },
     /**
      * One account's audit history, inside the card it belongs to.
@@ -2971,9 +2964,9 @@ const makeStyles = (palette: Palette) =>
      * what has already been done — which no control in this card can change.
      */
     history: {
-      gap: spacing.sm,
-      marginTop: spacing.sm,
-      paddingTop: spacing.sm,
+      gap: spacing.md,
+      marginTop: spacing.md,
+      paddingTop: spacing.md,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: palette.border,
     },
@@ -2981,12 +2974,12 @@ const makeStyles = (palette: Palette) =>
       flexDirection: 'row',
       alignItems: 'flex-start',
       justifyContent: 'space-between',
-      gap: spacing.sm,
+      gap: spacing.md,
     },
     itemText: {
       flex: 1,
       minWidth: 0,
-      gap: 1,
+      gap: spacing.xs,
     },
     itemBadges: {
       alignItems: 'flex-end',
@@ -2997,25 +2990,25 @@ const makeStyles = (palette: Palette) =>
       minWidth: 0,
     },
     actions: {
-      gap: spacing.md,
-      paddingTop: spacing.sm,
+      gap: spacing.lg,
+      paddingTop: spacing.md,
     },
     selectRow: {
       flexDirection: 'row',
       alignItems: 'center',
       flexWrap: 'wrap',
-      gap: spacing.sm,
+      gap: spacing.md,
     },
     toggleRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gap: spacing.md,
+      gap: spacing.lg,
     },
     toggleText: {
       flex: 1,
       minWidth: 0,
-      gap: 1,
+      gap: spacing.xs,
     },
   });
 

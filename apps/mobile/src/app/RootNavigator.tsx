@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, BackHandler, StatusBar, StyleSheet, View } from 'react-native';
 
 import { AccountProvider, useAccount } from '../account/AccountProvider';
 import { AppStateProvider } from './AppState';
 import { sessionIntro, type IntroSession } from './launchSession';
 import { TabBar, type TabKey } from '../components/TabBar';
-import { AccountSheet } from '../components/AccountSheet';
+import { AccountSheet, type AuthLinkNotice } from '../components/AccountSheet';
 import { AboutScreen } from '../screens/AboutScreen';
 import { AdminScreen } from '../screens/AdminScreen';
 import { AuditScreen } from '../screens/AuditScreen';
@@ -62,10 +62,23 @@ export interface RootNavigatorProps {
    * the process-lifetime singleton — see `launchSession.ts`.
    */
   introSession?: IntroSession;
+  /**
+   * Injected by tests to start with a screen already pushed.
+   *
+   * It exists so that the *route gate* can be tested directly rather than
+   * inferred. Without it, the only way a test could ask "does an unpublished
+   * screen render for a session that should not have it?" was to navigate, and
+   * navigation is exactly what the gate removes — so the test would pass whether
+   * the gate was there or not, and prove nothing.
+   *
+   * Defaults to `null`, which is what a cold launch produces.
+   */
+  initialDetail?: DetailKey | null;
 }
 
 export function RootNavigator({
   introSession = sessionIntro,
+  initialDetail = null,
 }: RootNavigatorProps): React.JSX.Element {
   /**
    * Decided once, synchronously, from process-lifetime state.
@@ -80,21 +93,67 @@ export function RootNavigator({
     introSession.shouldPlayIntro() ? 'intro' : 'tabs',
   );
   const [tab, setTab] = useState<TabKey>('dashboard');
-  const [detail, setDetail] = useState<DetailKey | null>(null);
+  const [detail, setDetail] = useState<DetailKey | null>(initialDetail);
   const [accountOpen, setAccountOpen] = useState(false);
   const [recoveryRequested, setRecoveryRequested] = useState(false);
+  const [authLinkNotice, setAuthLinkNotice] = useState<AuthLinkNotice | null>(null);
+  /**
+   * Distinguishes one delivered link from the next.
+   *
+   * The sheet shows a notice once per id, so a second link producing the same
+   * sentence is still delivered rather than being mistaken for unchanged state.
+   */
+  const authLinkSequence = useRef(0);
 
   const { isAdmin, isReady } = useAccount();
   const { maintenance } = useAppState();
   const maintenanceState = useMaintenanceState();
 
-  /** Listen for auth deep link callbacks (e.g. password recovery) */
+  /**
+   * Listen for auth deep link callbacks.
+   *
+   * A recovery link keeps its own flag, because it opens the password form. A
+   * confirmation or OAuth link has already established a session by the time
+   * this runs, so it opens the account view with a sentence saying what
+   * happened. A refused or expired link is shown as a failure rather than
+   * silently ignored — the person tapped something and is owed an answer.
+   */
   useEffect(() => {
-    const cleanup = setupAuthDeepLinking(() => {
+    const cleanup = setupAuthDeepLinking((outcome) => {
+      if (outcome.status === 'ignored') return;
+
       setRoute('tabs');
       setDetail('profile');
       setAccountOpen(true);
-      setRecoveryRequested(true);
+
+      if (outcome.status === 'error') {
+        setRecoveryRequested(false);
+        authLinkSequence.current += 1;
+        setAuthLinkNotice({
+          id: authLinkSequence.current,
+          tone: 'error',
+          message: outcome.message,
+        });
+        return;
+      }
+
+      if (outcome.type === 'recovery') {
+        setRecoveryRequested(true);
+        return;
+      }
+
+      setRecoveryRequested(false);
+      authLinkSequence.current += 1;
+      setAuthLinkNotice({
+        id: authLinkSequence.current,
+        tone: 'info',
+        message:
+          outcome.type === 'signup'
+            ? 'Email confirmed. This account is now signed in on this phone.'
+            : outcome.type === 'email_change'
+              ? 'Email address confirmed. This account is signed in on this phone.'
+              : 'Signed in. This account is now active on this phone.',
+      });
     });
     return cleanup;
   }, []);
@@ -244,6 +303,7 @@ export function RootNavigator({
           visible={accountOpen}
           onClose={() => setAccountOpen(false)}
           maintenanceOn
+          authLinkNotice={authLinkNotice}
         />
       </View>
     );
@@ -259,8 +319,43 @@ export function RootNavigator({
         {detail === 'audit' && <AuditScreen onClose={closeDetail} />}
         {detail === 'profile' && <ProfileScreen onClose={closeDetail} />}
         {detail === 'about' && <AboutScreen onClose={closeDetail} />}
-        {detail === 'ml' && <MlScreen onClose={closeDetail} />}
-        {detail === 'admin' && <AdminScreen onClose={closeDetail} />}
+        {/*
+          The learning centre is an administration surface, not a user one.
+
+          Training, dataset and model activation controls are privileged
+          operations, so the screen is behind the same role gate as the console
+          that opens it. `isAdmin` rather than `canOpenAdmin` here on purpose:
+          `canOpenAdmin` also requires the profile to have finished loading, and
+          using it would rip the screen away from an administrator whose profile
+          was mid-refresh. The entry point below still requires `canOpenAdmin`,
+          so the screen cannot be reached until the role is actually known.
+        */}
+        {detail === 'ml' && isAdmin && <MlScreen onClose={closeDetail} />}
+        {/*
+          Guarded the same way as the learning centre above, and for the same
+          reason: this screen reads and changes other people's accounts. The
+          entry point already requires `canOpenAdmin`, so the guard is not the
+          thing that keeps an ordinary user out — it is what happens when the
+          role goes away *while the screen is open*.
+
+          That is not hypothetical. Maintenance mode auto-opens this console for
+          an exempt administrator, and signing out from a screen the app opened
+          for you does not close it. Without this, the console stays mounted
+          after the account that opened it has signed out.
+        */}
+        {detail === 'admin' && isAdmin && (
+          <AdminScreen
+            onClose={closeDetail}
+            onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
+            /*
+             * So a failure card in the console can offer the action a 401
+             * actually needs. Without it the card says the session has expired
+             * and offers nothing, which leaves the reader to work out that the
+             * way back in is the account sheet on the dashboard behind them.
+             */
+            onOpenAccount={() => setAccountOpen(true)}
+          />
+        )}
 
         {detail === null && (
           <>
@@ -286,7 +381,11 @@ export function RootNavigator({
                 onOpenAudit={() => openDetail('audit')}
                 onOpenProfile={() => openDetail('profile')}
                 onOpenAbout={() => openDetail('about')}
-                onOpenMl={() => openDetail('ml')}
+                // The learning centre deliberately has no entry point here.
+                // It is reached from the administration console, which is the
+                // only place it belongs: everything on it trains, versions or
+                // activates a model, and ordinary users and guests own none of
+                // that. See the `ml` route above for the other half of the gate.
                 // Admin is only reachable when the account actually holds the
                 // role. Passed as undefined otherwise, so the row is not drawn
                 // at all rather than being drawn and refused.
@@ -312,6 +411,7 @@ export function RootNavigator({
         }}
         isRecoveryMode={recoveryRequested}
         maintenanceOn={maintenanceOn}
+        authLinkNotice={authLinkNotice}
       />
     </View>
   );
@@ -324,13 +424,19 @@ export function RootNavigator({
  * both live here — one place that reacts to a theme change, rather than every
  * screen remembering to set its own.
  */
-function ThemedRoot({ introSession }: { introSession?: IntroSession }): React.JSX.Element {
+function ThemedRoot({
+  introSession,
+  initialDetail,
+}: {
+  introSession?: IntroSession;
+  initialDetail?: DetailKey | null;
+}): React.JSX.Element {
   const { palette } = useTheme();
 
   return (
     <View style={[styles.root, { backgroundColor: palette.background }]}>
       <StatusBar barStyle={palette.statusBarStyle} />
-      <RootNavigator introSession={introSession} />
+      <RootNavigator introSession={introSession} initialDetail={initialDetail} />
     </View>
   );
 }
@@ -348,6 +454,8 @@ export interface AppProps {
   storage?: Storage;
   transport?: GloveTransport;
   leftTransport?: GloveTransport;
+  /** Test-only. See `RootNavigatorProps.initialDetail`. */
+  initialDetail?: DetailKey | null;
 }
 
 /** The application root: state, then account, then theme, then navigation. */
@@ -356,6 +464,7 @@ export function App({
   storage,
   transport,
   leftTransport,
+  initialDetail,
 }: AppProps = {}): React.JSX.Element {
   return (
     <AppStateProvider storage={storage} transport={transport} leftTransport={leftTransport}>
@@ -365,7 +474,7 @@ export function App({
         neither of those should have to be re-derived per consumer.
       */}
       <AccountGate>
-        <ThemeGate introSession={introSession} />
+        <ThemeGate introSession={introSession} initialDetail={initialDetail} />
       </AccountGate>
     </AppStateProvider>
   );
@@ -396,6 +505,7 @@ function AccountGate({ children }: { children: React.ReactNode }): React.JSX.Ele
   return (
     <AccountProvider onBeforeSignOut={releasePushRegistration}>
       <PushAccountSync />
+      <MlAccountSync />
       {children}
     </AccountProvider>
   );
@@ -421,6 +531,30 @@ function PushAccountSync(): null {
 }
 
 /**
+ * Tells the learning centre which account its recordings belong to.
+ *
+ * A sibling of `PushAccountSync`, and here for the same reason: the account
+ * provider is mounted inside app state, so the centre cannot read the session
+ * itself without the learning module depending on the account module and back.
+ *
+ * Nothing is migrated or re-owned when this changes. A guest's windows stay on
+ * the phone and stay unowned — see the guest-migration rules in the directive,
+ * which are a separate piece of work from the learning centre.
+ */
+function MlAccountSync(): null {
+  const { ml } = useAppState();
+  const { user, isGuest } = useAccount();
+  const ownerId = user?.id ?? null;
+  const signedIn = user !== null && !isGuest;
+
+  useEffect(() => {
+    ml.setAccount({ ownerId, signedIn });
+  }, [ml, ownerId, signedIn]);
+
+  return null;
+}
+
+/**
  * Bridges the storage instance from app state into the theme provider.
  *
  * A tiny component rather than putting `ThemeProvider` outside
@@ -429,11 +563,17 @@ function PushAccountSync(): null {
  * decides which implementation that is (AsyncStorage on device, in-memory in
  * tests).
  */
-function ThemeGate({ introSession }: { introSession?: IntroSession }): React.JSX.Element {
+function ThemeGate({
+  introSession,
+  initialDetail,
+}: {
+  introSession?: IntroSession;
+  initialDetail?: DetailKey | null;
+}): React.JSX.Element {
   const { storage } = useAppState();
   return (
     <ThemeProvider storage={storage}>
-      <ThemedRoot introSession={introSession} />
+      <ThemedRoot introSession={introSession} initialDetail={initialDetail} />
     </ThemeProvider>
   );
 }

@@ -38,7 +38,6 @@ import type { Session, Subscription, User } from '@supabase/supabase-js';
 
 import { getSupabaseClient, isSupabaseAvailable } from '../supabase/client';
 import {
-  deleteCurrentAccount,
   requestPasswordReset,
   signInWithEmail,
   signUpWithEmail,
@@ -88,14 +87,24 @@ export interface AccountValue {
   signOut(): Promise<void>;
   requestPasswordReset(email: string): Promise<AuthResult>;
   updatePassword(newPassword: string): Promise<AuthResult>;
-  deleteAccount(): Promise<AuthResult>;
+  /**
+   * Clears the local session after the backend has confirmed deletion.
+   *
+   * Separate from the confirmation request on purpose: the request belongs to
+   * the dialog that collects the code, while clearing local state belongs
+   * here. Calling this without a real deletion would only sign the device out;
+   * it cannot delete anything.
+   */
+  completeAccountDeletion(): void;
   /** Re-reads the profile row, e.g. after the user edits their name. */
   refreshProfile(): Promise<void>;
   /**
    * Writes fields the user may change about themselves. Cannot set `role` or
    * `status` — see the implementation for why that restriction is structural.
+   * `avatarUrl` is constrained to this account's own folder in the `avatars`
+   * bucket, so the column cannot be used to point the app at another host.
    */
-  updateProfile(patch: { displayName?: string }): Promise<AuthResult>;
+  updateProfile(patch: { displayName?: string; avatarUrl?: string | null }): Promise<AuthResult>;
 }
 
 const AccountContext = createContext<AccountValue | null>(null);
@@ -282,15 +291,18 @@ export function AccountProvider({
     setSession(null);
   }, [releaseBeforeSessionEnds]);
 
-  const deleteAccount = useCallback(async () => {
-    await releaseBeforeSessionEnds();
-    const result = await deleteCurrentAccount();
-    if (result.success) {
-      profileUserIdRef.current = null;
-      setProfile(null);
-      setSession(null);
-    }
-    return result;
+  const completeAccountDeletion = useCallback(() => {
+    /*
+     * The provider's before-session hook has nothing left to release for most
+     * installs: the backend deletes push registrations and the Auth identity in
+     * the same action. It is still invoked for any other per-session cleanup a
+     * host app registered, and its failure must not leave a deleted account
+     * looking signed in on this device.
+     */
+    void releaseBeforeSessionEnds();
+    profileUserIdRef.current = null;
+    setProfile(null);
+    setSession(null);
   }, [releaseBeforeSessionEnds]);
 
   const refreshProfile = useCallback(async () => {
@@ -316,7 +328,7 @@ export function AccountProvider({
    * request; only a read-back shows what the stored row actually contains.
    */
   const updateProfile = useCallback(
-    async (patch: { displayName?: string }): Promise<AuthResult> => {
+    async (patch: { displayName?: string; avatarUrl?: string | null }): Promise<AuthResult> => {
       const client = getSupabaseClient();
       const userId = session?.user?.id ?? null;
 
@@ -336,7 +348,7 @@ export function AccountProvider({
        * the column this function is allowed to touch makes that a compile error
        * rather than a request the trigger has to refuse at runtime.
        */
-      const update: { display_name?: string } = {};
+      const update: { display_name?: string; avatar_url?: string | null } = {};
       if (patch.displayName !== undefined) {
         const trimmed = patch.displayName.trim();
         if (trimmed.length === 0) {
@@ -349,6 +361,26 @@ export function AccountProvider({
           };
         }
         update.display_name = trimmed;
+      }
+
+      if (patch.avatarUrl !== undefined) {
+        /*
+         * Only a URL inside this account's own folder in this project's
+         * `avatars` bucket is accepted. The database policy stops a client
+         * writing another user's *file*, but nothing would stop a row pointing
+         * at an arbitrary external image — which the app would then fetch and
+         * display, leaking a request to a third party on every profile view.
+         */
+        if (patch.avatarUrl !== null) {
+          const ownFolder = `/storage/v1/object/public/avatars/${userId}/`;
+          if (!patch.avatarUrl.includes(ownFolder)) {
+            return {
+              success: false,
+              error: 'A profile photo must come from this account’s own storage folder.',
+            };
+          }
+        }
+        update.avatar_url = patch.avatarUrl;
       }
 
       if (Object.keys(update).length === 0) {
@@ -406,7 +438,7 @@ export function AccountProvider({
       signOut,
       requestPasswordReset,
       updatePassword,
-      deleteAccount,
+      completeAccountDeletion,
       refreshProfile,
       updateProfile,
     }),
@@ -420,7 +452,7 @@ export function AccountProvider({
       signIn,
       signUp,
       signOut,
-      deleteAccount,
+      completeAccountDeletion,
       refreshProfile,
       updateProfile,
     ],

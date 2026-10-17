@@ -5,9 +5,19 @@
  * mapping and offline resilience.
  */
 
+import { Linking } from 'react-native';
 import type { Session, Subscription, User } from '@supabase/supabase-js';
 
 import { getSupabaseClient } from './client';
+
+/**
+ * The one address Supabase Auth is allowed to send people back to.
+ *
+ * Kept here and imported by the deep-link parser, so the address the provider is
+ * asked to redirect to and the address the app accepts cannot drift apart. The
+ * Android intent filter declares this same scheme and host.
+ */
+export const AUTH_CALLBACK_URL = 'sanketvaani://auth-callback';
 
 export interface AuthResult<T = void> {
   readonly success: boolean;
@@ -22,6 +32,7 @@ export function formatAuthError(error: unknown): string {
 
   const err = error as { message?: string; status?: number; code?: string };
   const msg = err.message || '';
+  const code = err.code ?? '';
 
   if (msg.includes('Invalid login credentials') || msg.includes('invalid_grant')) {
     return 'Invalid email or password. Please try again.';
@@ -35,10 +46,36 @@ export function formatAuthError(error: unknown): string {
   if (msg.includes('Password should be at least')) {
     return 'Password must be at least 6 characters long.';
   }
+  if (
+    msg.includes('Email link is invalid or has expired') ||
+    msg.includes('Token has expired or is invalid') ||
+    msg.includes('invalid or has expired') ||
+    code === 'otp_expired'
+  ) {
+    return 'That link or code is no longer valid. Request a new one and use the newest message.';
+  }
+  if (msg.includes('For security purposes, you can only request this after')) {
+    return 'A new email was requested too recently. Wait a minute before asking again.';
+  }
+  if (msg.includes('provider is not enabled') || msg.includes('Unsupported provider')) {
+    return 'Google sign-in is not enabled for this project yet. Use email and password.';
+  }
+  if (msg.includes('Signups not allowed') || msg.includes('signup_disabled')) {
+    return 'This project is not accepting new accounts at the moment.';
+  }
+  if (msg.includes('Email not authorized') || msg.includes('email_not_authorized')) {
+    return 'This project cannot send mail to that address yet. Contact sanketvaanni@gmail.com.';
+  }
   if (msg.includes('Network request failed') || msg.includes('Failed to fetch') || msg.includes('network')) {
     return 'Network connection failed. You can continue using Sanket Vaanni offline.';
   }
-  if (msg.includes('rate limit') || msg.includes('over_email_send_rate_limit')) {
+  if (
+    msg.includes('rate limit') ||
+    msg.includes('over_email_send_rate_limit') ||
+    code === 'over_email_send_rate_limit' ||
+    code === 'over_request_rate_limit' ||
+    code === 'over_sms_send_rate_limit'
+  ) {
     return 'Too many attempts. Please wait a few minutes and try again.';
   }
 
@@ -74,6 +111,10 @@ export async function signUpWithEmail(
       email: cleanEmail,
       password,
       options: {
+        // Without this, the provider falls back to the project's Site URL — a
+        // web address this app cannot open. The confirmation link then exists
+        // but never reaches the phone it was requested from.
+        emailRedirectTo: AUTH_CALLBACK_URL,
         data: {
           display_name: displayName?.trim() || cleanEmail.split('@')[0],
         },
@@ -183,7 +224,7 @@ export async function requestPasswordReset(email: string): Promise<AuthResult> {
 
   try {
     const { error } = await client.auth.resetPasswordForEmail(cleanEmail, {
-      redirectTo: 'sanketvaani://auth-callback',
+      redirectTo: AUTH_CALLBACK_URL,
     });
 
     if (error) {
@@ -193,6 +234,138 @@ export async function requestPasswordReset(email: string): Promise<AuthResult> {
     return { success: true };
   } catch (err) {
     return { success: false, error: formatAuthError(err) };
+  }
+}
+
+/**
+ * Sends a fresh confirmation email for an account that is still pending.
+ *
+ * The provider, not this screen, owns the real rate limit. The UI's cooldown is
+ * only there to stop a person hammering the button; the provider's refusal is
+ * mapped by `formatAuthError` and shown unchanged in meaning rather than being
+ * hidden behind a success message.
+ */
+export async function resendConfirmationEmail(email: string): Promise<AuthResult> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return {
+      success: false,
+      error: 'Cloud authentication is not configured. Local guest mode is active.',
+    };
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return { success: false, error: 'Please enter a valid email address.' };
+  }
+
+  try {
+    const { error } = await client.auth.resend({
+      type: 'signup',
+      email: cleanEmail,
+      options: { emailRedirectTo: AUTH_CALLBACK_URL },
+    });
+
+    if (error) {
+      return { success: false, error: formatAuthError(error) };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: formatAuthError(err) };
+  }
+}
+
+/**
+ * Confirms a pending account with the six-digit code from its email.
+ *
+ * This is the fallback for a person who cannot open the link (a desktop inbox,
+ * for example). It confirms the same account; it does not create a second one,
+ * and it cannot be used without the code the provider sent.
+ */
+export async function verifyEmailCode(
+  email: string,
+  code: string,
+): Promise<AuthResult<{ session: Session | null }>> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return {
+      success: false,
+      error: 'Cloud authentication is not configured. Local guest mode is active.',
+    };
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanCode = code.trim();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return { success: false, error: 'Please enter a valid email address.' };
+  }
+  if (!/^\d{6}$/.test(cleanCode)) {
+    return { success: false, error: 'Enter the six-digit code from the email.' };
+  }
+
+  try {
+    const { data, error } = await client.auth.verifyOtp({
+      email: cleanEmail,
+      token: cleanCode,
+      type: 'signup',
+    });
+
+    if (error) {
+      return { success: false, error: formatAuthError(error) };
+    }
+
+    return { success: true, data: { session: data.session ?? null } };
+  } catch (err) {
+    return { success: false, error: formatAuthError(err) };
+  }
+}
+
+/**
+ * Starts Google sign-in in the phone's browser.
+ *
+ * The provider is the one already configured on the Supabase project — this
+ * function passes no client secret, because a mobile binary is not a safe place
+ * to keep one and the provider's browser flow does not require one here. The
+ * browser is opened
+ * explicitly (`skipBrowserRedirect`) so the app can report a failure to launch
+ * instead of silently doing nothing. The session arrives later, on the
+ * `sanketvaani://auth-callback` deep link, not from this call.
+ */
+export async function signInWithGoogle(): Promise<AuthResult<{ url: string }>> {
+  const client = getSupabaseClient();
+  if (!client) {
+    return {
+      success: false,
+      error: 'Cloud authentication is not configured. Local guest mode is active.',
+    };
+  }
+
+  try {
+    const { data, error } = await client.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: AUTH_CALLBACK_URL,
+        skipBrowserRedirect: true,
+      },
+    });
+
+    if (error) {
+      return { success: false, error: formatAuthError(error) };
+    }
+    if (!data.url) {
+      return {
+        success: false,
+        error: 'Google sign-in did not return a page to open. Try again.',
+      };
+    }
+
+    await Linking.openURL(data.url);
+    return { success: true, data: { url: data.url } };
+  } catch (err) {
+    return {
+      success: false,
+      error: `The browser could not be opened (${formatAuthError(err)}). Use email and password instead.`,
+    };
   }
 }
 
@@ -221,32 +394,6 @@ export async function updatePassword(newPassword: string): Promise<AuthResult> {
       return { success: false, error: formatAuthError(error) };
     }
 
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: formatAuthError(err) };
-  }
-}
-
-/**
- * Deletes the authenticated user account and all associated cloud data via secure RPC.
- */
-export async function deleteCurrentAccount(): Promise<AuthResult> {
-  const client = getSupabaseClient();
-  if (!client) {
-    return {
-      success: false,
-      error: 'Cloud authentication is not configured.',
-    };
-  }
-
-  try {
-    const { error } = await client.rpc('delete_user_account');
-    if (error) {
-      return { success: false, error: formatAuthError(error) };
-    }
-
-    // Sign out locally
-    await client.auth.signOut();
     return { success: true };
   } catch (err) {
     return { success: false, error: formatAuthError(err) };

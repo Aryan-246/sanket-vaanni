@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AppConfig } from '../config.js';
+import { pushUnavailableReason } from '../announcements/dispatch.js';
 import { createAuthHook } from '../middleware/auth.js';
 import {
   initFirebaseAdmin,
@@ -32,7 +33,21 @@ export function createNotificationRoutes(config: AppConfig) {
       return reply.status(200).send({
         configured: status.initialized,
         projectId: status.projectId ?? null,
-        error: status.error ?? null,
+        /*
+         * Classified, never forwarded.
+         *
+         * `status.error` on an unconfigured server reads "Service account key
+         * file not found at: <path>", so returning the field verbatim would
+         * publish the layout of this machine's filesystem on a route that
+         * requires no credentials to call. `/admin/health` already refuses to
+         * return it for exactly that reason, and its comment notes that a test
+         * asserting only on `credentialsPath` would not catch the leak by the
+         * other door. This is that other door.
+         *
+         * The same classifier is used rather than a second one, so the public
+         * sentence and the console's sentence cannot drift apart.
+         */
+        reason: pushUnavailableReason(status),
       });
     });
 

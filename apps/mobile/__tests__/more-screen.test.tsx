@@ -9,6 +9,7 @@
  */
 import ReactTestRenderer from 'react-test-renderer';
 
+import { setSupabaseDisabledForTesting } from '../src/supabase/client';
 import { AUDIT_MARKER, OLED_MARKER, has, pressByLabel, renderApp, renderedText, teardown } from './support';
 
 /** Reads More, which is where these settings live. */
@@ -26,25 +27,55 @@ function isControl(
 }
 
 describe('the cloud account entry point on Settings', () => {
+  afterEach(() => {
+    // The flag is module state, so it would otherwise leak into the rest of the
+    // file. `false` restores the ambient build configuration rather than
+    // asserting a value.
+    setSupabaseDisabledForTesting(false);
+  });
+
   it('reports the account state honestly and opens the real account sheet', async () => {
     const { renderer } = await renderApp({ skipIntro: true });
     const output = await openMore(renderer);
 
-    /*
-     * The row states the true condition rather than implying a connection. No
-     * account service is configured in this build, so the honest value is
-     * "Local only" — a spinner or a "Connected" here would be a claim the build
-     * cannot support.
-     */
     expect(output).toContain('Cloud & Account');
+    // "Local only" is the honest label while signed out, in any build: a spinner
+    // or a "Connected" here would be a claim the app cannot support.
     expect(output).toContain('Local only');
-    expect(output).toContain('No account service is configured');
+
+    /*
+     * The description has two honest forms, and which one is correct depends on
+     * whether an account service is configured — a property of the *build*, not
+     * of this test. Asserting only one of them made this test pass or fail on
+     * whatever `.env` happened to exist on the machine running it: `.env` is
+     * gitignored, so a fresh clone took the unconfigured branch and a developer
+     * machine with credentials took the configured one, and only the first was
+     * ever asserted. Both are honest; the unconfigured one is now asserted
+     * deterministically below, where its premise is actually established.
+     */
+    expect(output).toMatch(
+      /Everything lives on this phone\. Tap to sign in and carry it across devices\.|No account service is configured, so everything stays on this phone\. Tap for details\./,
+    );
 
     // Tapping it opens the real account sheet, not a placeholder.
     await pressByLabel(renderer, 'Local only');
     const sheetOutput = renderedText(renderer);
     expect(sheetOutput).toContain('Sign In to Sanket Vaanni');
     expect(sheetOutput).toContain('Email address');
+
+    await teardown(renderer);
+  });
+
+  it('says the service is missing rather than inviting a sign-in that cannot happen', async () => {
+    setSupabaseDisabledForTesting(true);
+    const { renderer } = await renderApp({ skipIntro: true });
+    const output = await openMore(renderer);
+
+    expect(output).toContain('Local only');
+    expect(output).toContain('No account service is configured');
+    // The invitation is the half that would be false here: there is nothing on
+    // this build to sign in to, so offering it would promise what cannot happen.
+    expect(output).not.toContain('Tap to sign in');
 
     await teardown(renderer);
   });

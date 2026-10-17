@@ -13,7 +13,7 @@
 import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 
-import { App } from '../src/app/RootNavigator';
+import { App, type DetailKey } from '../src/app/RootNavigator';
 import { createIntroSession, type IntroSession } from '../src/app/launchSession';
 import { MockTransport } from '../src/ble/mockTransport';
 import { createInMemoryStorage, type Storage } from '../src/storage';
@@ -52,6 +52,14 @@ export interface RenderAppOptions {
   skipIntro?: boolean;
   /** Seed the theme preference, for theme tests that need a starting mode. */
   themeMode?: ThemeMode;
+  /**
+   * Start with a screen already pushed.
+   *
+   * The only way to ask whether a *route* is gated, as opposed to whether its
+   * entry point is drawn. Navigating to it cannot answer that question, because
+   * navigation is what the gate removes.
+   */
+  initialDetail?: DetailKey | null;
   /**
    * Called once per React commit.
    *
@@ -94,6 +102,7 @@ export async function renderApp(options: RenderAppOptions = {}): Promise<AppHarn
       transport={right}
       leftTransport={left}
       introSession={session}
+      initialDetail={options.initialDetail}
     />
   );
   const onCommit = options.onCommit;
@@ -223,6 +232,27 @@ export function has(
   testID: string,
 ): boolean {
   return renderer.root.findAllByProps({ testID }).length > 0;
+}
+
+/**
+ * Whether the control with this testID is disabled.
+ *
+ * Reads `accessibilityState.disabled` off the node rather than the `disabled`
+ * prop, because that is what a screen reader is told and therefore what the user
+ * actually experiences. A button that is disabled in the tree but still announced
+ * as enabled is a bug this would otherwise miss.
+ *
+ * Throws when nothing carries the testID: an absent control is not a disabled
+ * one, and folding the two together would let a test pass against a screen that
+ * forgot to render the thing it is testing.
+ */
+export function isDisabled(
+  renderer: ReactTestRenderer.ReactTestRenderer,
+  testID: string,
+): boolean {
+  const nodes = renderer.root.findAllByProps({ testID });
+  if (nodes.length === 0) throw new Error(`No node found for testID "${testID}".`);
+  return nodes.some((node) => node.props.accessibilityState?.disabled === true);
 }
 
 /** Flushes pending microtasks — a storage read, a fire-and-forget write. */

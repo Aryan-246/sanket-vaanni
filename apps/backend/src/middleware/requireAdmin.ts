@@ -60,9 +60,24 @@ declare module 'fastify' {
 
 export interface AdminAuthDeps {
   /** Verifies a token and returns the user, or null. Injected so tests can stub it. */
-  verifyToken?: (token: string) => Promise<{ id: string } | null>;
+  verifyToken?: (token: string) => Promise<{ id: string; email?: string | null } | null>;
   /** Reads the role and status for a user id. Injected so tests can stub it. */
   readRole?: (userId: string) => Promise<{ role: string; status: string } | null>;
+  /**
+   * The service-role client.
+   *
+   * Injected only by tests, so that the admin routes' own behaviour — which
+   * filters reach the database, what the authorization matrix answers — can be
+   * exercised without a live Supabase. Production passes no `deps` at all, so
+   * this changes nothing about how the service authorizes a request; it is a
+   * constructor argument, not something a caller can supply over the wire.
+   *
+   * Supplying it also stands in for the three environment variables, because a
+   * test that provides the client has provided what those variables exist to
+   * produce. Without that, every route test would have to fake credentials to
+   * reach the code under test, and the credentials would end up in the suite.
+   */
+  serviceClient?: SupabaseClient;
 }
 
 const BEARER_PREFIX = 'Bearer ';
@@ -134,11 +149,20 @@ export function createRequireAdmin(config: AppConfig, deps: AdminAuthDeps = {}) 
       : null;
 
   const serviceClient =
-    availability.available && config.supabaseUrl && config.supabaseServiceRoleKey
+    deps.serviceClient ??
+    (availability.available && config.supabaseUrl && config.supabaseServiceRoleKey
       ? createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
           auth: { persistSession: false, autoRefreshToken: false },
         })
-      : null;
+      : null);
+
+  /*
+   * An injected client satisfies the configuration check, because it is the
+   * thing the three variables are required in order to build. The 503 for an
+   * unconfigured deployment is unchanged for every caller that does not inject
+   * one — which is every caller in production.
+   */
+  const usable = availability.available || deps.serviceClient !== undefined;
 
   const verifyToken =
     deps.verifyToken ??
@@ -146,7 +170,17 @@ export function createRequireAdmin(config: AppConfig, deps: AdminAuthDeps = {}) 
       if (!authClient) return null;
       const { data, error } = await authClient.auth.getUser(token);
       if (error || !data.user) return null;
-      return { id: data.user.id };
+      /*
+       * The email comes from the Auth server's answer about *this token*, not
+       * from a request header or body, so it cannot be chosen by the caller. It
+       * is carried through rather than dropped because the audit log's whole
+       * purpose is attribution by a person: an `actor_id` alone leaves an
+       * investigator cross-referencing a UUID against a table that may since
+       * have changed, and a permanently NULL `actor_email` makes the column
+       * decorative. An anonymous account genuinely has no email, and null is
+       * then the correct answer rather than a missing one.
+       */
+      return { id: data.user.id, email: data.user.email ?? null };
     });
 
   const readRole =
@@ -166,7 +200,7 @@ export function createRequireAdmin(config: AppConfig, deps: AdminAuthDeps = {}) 
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> {
-    if (!availability.available || !serviceClient) {
+    if (!usable || !serviceClient) {
       reply.status(503).send({ error: availability.reason });
       return;
     }
@@ -208,7 +242,7 @@ export function createRequireAdmin(config: AppConfig, deps: AdminAuthDeps = {}) 
       return;
     }
 
-    request.adminActor = { id: user.id, email: null };
+    request.adminActor = { id: user.id, email: user.email ?? null };
     request.adminService = serviceClient;
   };
 }
@@ -222,6 +256,18 @@ export function createRequireAdmin(config: AppConfig, deps: AdminAuthDeps = {}) 
  * whole point of the log is that it is complete.
  *
  * Throws on failure so the caller's error path runs.
+ *
+ * ## What the row records about the outcome
+ *
+ * This is the *request* half of an action: it says an action was asked for, by
+ * whom and why, and it is written before the action so that a change cannot
+ * happen unrecorded. It therefore records `outcome: 'requested'` rather than
+ * claiming the action worked — at this moment that is not yet known. The
+ * terminal `succeeded`/`failed` row is appended afterwards by `recordOutcome`,
+ * under the same `requestId`, so the pair reads as one action that was asked for
+ * and then resolved. Recording the request as if it had succeeded is the one
+ * thing this must not do: a log that says an account was suspended when the
+ * update in fact failed is worse than no log, because it is believed.
  */
 export async function writeAudit(
   service: SupabaseClient,
@@ -232,6 +278,8 @@ export async function writeAudit(
     targetId?: string | null;
     reason: string;
     metadata?: Record<string, unknown>;
+    /** Fastify's request id, so the request half and the outcome half can be paired. */
+    requestId?: string | null;
   },
 ): Promise<void> {
   const { error } = await service.from('admin_audit_log').insert({
@@ -241,7 +289,11 @@ export async function writeAudit(
     target_type: entry.targetType,
     target_id: entry.targetId ?? null,
     reason: entry.reason,
-    metadata: entry.metadata ?? {},
+    metadata: {
+      ...(entry.metadata ?? {}),
+      outcome: 'requested',
+      ...(entry.requestId ? { requestId: entry.requestId } : {}),
+    },
   });
 
   if (error) {

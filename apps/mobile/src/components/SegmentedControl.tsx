@@ -18,6 +18,17 @@ export interface SegmentedControlProps<T extends string> {
   /** Announced as the group's purpose. */
   accessibilityLabel: string;
   disabled?: boolean;
+  /**
+   * Uses the caption size and a tighter horizontal padding.
+   *
+   * For bars with many short choices — the six administration areas, the five
+   * learning-centre areas — where equal segments on a 360 dp content width are
+   * narrower than a label at the label size. Truncating "Overview" to
+   * "Overvi…" hides the name of a destination the user has to choose between,
+   * so the bar spends size on the labels instead: the touch target is
+   * unchanged, and the accessibility label was never truncated.
+   */
+  dense?: boolean;
 }
 
 /**
@@ -34,13 +45,14 @@ export function SegmentedControl<T extends string>({
   onChange,
   accessibilityLabel,
   disabled = false,
+  dense = false,
 }: SegmentedControlProps<T>): React.JSX.Element {
   const { palette } = useTheme();
   const styles = useStyles(makeStyles);
 
   return (
     <View
-      style={[styles.track, disabled && styles.disabled]}
+      style={[styles.track, dense && styles.trackDense, disabled && styles.disabled]}
       accessibilityRole="radiogroup"
       accessibilityLabel={accessibilityLabel}
     >
@@ -56,12 +68,13 @@ export function SegmentedControl<T extends string>({
             onPress={() => onChange(option.value)}
             style={({ pressed }) => [
               styles.segment,
+              dense && styles.segmentDense,
               selected && styles.segmentSelected,
               pressed && !disabled && styles.pressed,
             ]}
           >
             <AppText
-              variant="label"
+              variant={dense ? 'caption' : 'label'}
               color={selected ? palette.textPrimary : palette.textSecondary}
               center
               numberOfLines={1}
@@ -107,6 +120,19 @@ const makeStyles = (palette: Palette) =>
       backgroundColor: palette.surfaceRaised,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: palette.borderStrong,
+    },
+    segmentDense: {
+      paddingHorizontal: spacing.xs / 2,
+    },
+    /*
+     * A hair less padding between and around the segments, spent on the labels
+     * instead. Six segments on a 360 dp column leave ~57 dp each; at the
+     * caption size "Overview" needs almost exactly that, so 4 dp of track and
+     * gap is the difference between the whole word and "Overvie…".
+     */
+    trackDense: {
+      padding: 2,
+      gap: 2,
     },
     pressed: {
       opacity: 0.7,

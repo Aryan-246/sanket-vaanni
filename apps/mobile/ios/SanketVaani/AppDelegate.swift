@@ -31,6 +31,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     return true
   }
+
+  // Auth confirmation and recovery links arrive as `sanketvaani://auth-callback`.
+  // React Native's linking manager turns that URL into the JavaScript event the
+  // deep-link handler subscribes to; without this, only a cold launch would see
+  // the address.
+  func application(
+    _ app: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    return RCTLinkingManager.application(app, open: url, options: options)
+  }
 }
 
 class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {

@@ -45,6 +45,7 @@ import {
   isDeviceSupported,
   isMessagingAvailable,
   messagingUnavailableReason,
+  hasNotificationPermission,
   requestNotificationPermission,
   subscribeToForegroundMessages,
   subscribeToNotificationTaps,
@@ -98,6 +99,14 @@ export interface PushBridge {
   /** Whether this device can receive messages at all, asynchronously. */
   isDeviceSupported(): Promise<boolean>;
   requestPermission(): Promise<NotificationPermissionResult>;
+  /**
+   * What the platform would do with a notification now, without asking anyone.
+   *
+   * Separate from `requestPermission` because restoring a stored setting must
+   * not raise a prompt, and because a permission that was granted can still be
+   * withdrawn afterwards — see `hasNotificationPermission` in `./messaging`.
+   */
+  hasPermission(): Promise<NotificationPermissionResult>;
   getToken(): Promise<string>;
   deleteToken(): Promise<void>;
   onForegroundMessage(handler: (message: PushMessage) => void): () => void;
@@ -112,6 +121,7 @@ const DEFAULT_BRIDGE: PushBridge = {
   unavailableReason: messagingUnavailableReason,
   isDeviceSupported,
   requestPermission: requestNotificationPermission,
+  hasPermission: hasNotificationPermission,
   getToken: getDeviceToken,
   deleteToken: deleteDeviceToken,
   onForegroundMessage: subscribeToForegroundMessages,
@@ -246,6 +256,23 @@ export class PushController {
   }
 
   /**
+   * Asks the platform whether it would deliver, without prompting.
+   *
+   * A read that fails is reported as `unknown` rather than as a refusal: a
+   * bridge that threw has told us nothing about the permission, and recording
+   * it as denied would put "your phone is blocking notifications" on screen for
+   * a reason nobody can act on. A launch must not fail over this either — the
+   * setting is worth less than the app opening.
+   */
+  private async readPermission(): Promise<PushPermission> {
+    try {
+      return await this.bridge.hasPermission();
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
    * Reads what was persisted, and reconciles it with the account.
    *
    * A cold start from a tapped notification is read here too: the app was not
@@ -258,14 +285,31 @@ export class PushController {
     if (this.disposed) return;
 
     if (stored !== null && typeof stored.enabled === 'boolean') {
+      /*
+       * A stored `enabled` is what the user chose; it is not evidence that the
+       * phone still delivers. Android withdraws the notification permission on
+       * its own for apps it considers unused, and the user can switch it off in
+       * Settings, so a setting that was on when the app last ran can be on
+       * screen while nothing arrives. The platform is asked rather than assumed.
+       * It is a read, not a request: restoring a setting must not raise a
+       * prompt, which is why this goes through `hasPermission` and not
+       * `requestPermission`.
+       *
+       * A failed read is `unknown`, and `unknown` is not `granted`. The row is
+       * where that distinction is turned into a sentence — see
+       * `describePushRow`.
+       */
+      const permission: PushPermission = stored.enabled
+        ? await this.readPermission()
+        : 'unknown';
+
+      if (this.disposed) return;
+
       this.patch({
         enabled: stored.enabled,
         token: typeof stored.token === 'string' ? stored.token : null,
         status: stored.enabled ? 'on' : 'off',
-        // A token that survived a restart was granted permission at some point;
-        // the platform is the only authority on whether it still holds, and it
-        // is re-read the next time the user acts.
-        permission: stored.enabled ? 'granted' : 'unknown',
+        permission,
       });
     }
 

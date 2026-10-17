@@ -31,6 +31,7 @@ import { AppText } from '../components/AppText';
 import { Avatar } from '../components/Avatar';
 import { Badge } from '../components/Badge';
 import { Card } from '../components/Card';
+import { DeleteAccountDialog } from '../components/DeleteAccountDialog';
 import { DetailHeader } from '../components/DetailHeader';
 import { Icon } from '../components/Icon';
 import { ListRow } from '../components/ListRow';
@@ -38,6 +39,11 @@ import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { TextField } from '../components/TextField';
 import { useAccount } from '../account/AccountProvider';
+import {
+  pickAvatar,
+  removeAvatarByUrl,
+  uploadAvatar,
+} from '../account/avatar';
 import { spacing } from '../theme';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
@@ -56,6 +62,9 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoStatus, setPhotoStatus] = useState<string | null>(null);
 
   /** The name being edited, falling back to the account's own value. */
   const currentName = displayName ?? account.displayName ?? '';
@@ -95,6 +104,63 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
     setStatus(result.error ?? 'The name could not be saved.');
   }, [account, displayName]);
 
+  /*
+   * The upload order is what makes a failure safe: the new object is written
+   * first, the row is pointed at it second, and only then is the old object
+   * removed. Every interruption leaves either the old photo or the new one
+   * referenced — never neither.
+   */
+  const changePhoto = useCallback(async () => {
+    const userId = account.user?.id ?? null;
+    if (userId === null) return;
+
+    setPhotoStatus(null);
+    const picked = await pickAvatar();
+    if (!picked.ok) {
+      if (!picked.cancelled && picked.error !== null) setPhotoStatus(picked.error);
+      return;
+    }
+
+    setPhotoBusy(true);
+    const uploaded = await uploadAvatar(userId, picked.avatar);
+    if (!uploaded.ok) {
+      setPhotoBusy(false);
+      setPhotoStatus(uploaded.error);
+      return;
+    }
+
+    const previous = account.avatarUrl;
+    const saved = await account.updateProfile({ avatarUrl: uploaded.url });
+    if (!saved.success) {
+      // The row still points at the old photo, so the new object is an orphan.
+      await removeAvatarByUrl(uploaded.url);
+      setPhotoBusy(false);
+      setPhotoStatus(saved.error ?? 'The photo could not be saved.');
+      return;
+    }
+
+    await removeAvatarByUrl(previous);
+    setPhotoBusy(false);
+    setPhotoStatus('Photo updated.');
+  }, [account]);
+
+  const removePhoto = useCallback(async () => {
+    const previous = account.avatarUrl;
+    if (previous === null) return;
+
+    setPhotoBusy(true);
+    setPhotoStatus(null);
+    const saved = await account.updateProfile({ avatarUrl: null });
+    if (!saved.success) {
+      setPhotoBusy(false);
+      setPhotoStatus(saved.error ?? 'The photo could not be removed.');
+      return;
+    }
+    await removeAvatarByUrl(previous);
+    setPhotoBusy(false);
+    setPhotoStatus('Photo removed.');
+  }, [account]);
+
   const confirmSignOut = useCallback(() => {
     Alert.alert(
       'Sign out?',
@@ -108,27 +174,19 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
     );
   }, [account]);
 
+  /*
+   * The old flow deleted on a single Alert confirmation. That is gone: deletion
+   * now requires a code sent to the account's verified address, so the button
+   * opens the same dialog the account sheet uses rather than a second, weaker
+   * path.
+   */
   const confirmDelete = useCallback(() => {
-    Alert.alert(
-      'Delete this account?',
-      'The account and its stored preferences are removed. Recognitions synced to it are deleted with it. This cannot be undone, and anything held only on this phone is not affected.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            void account.deleteAccount().then((result) => {
-              if (!result.success) setStatus(result.error ?? 'The account could not be deleted.');
-            });
-          },
-        },
-      ],
-    );
-  }, [account]);
+    setDeleting(true);
+  }, []);
 
   return (
-    <Screen scroll testID="profile-screen">
+    <>
+      <Screen scroll testID="profile-screen">
       <DetailHeader title="Profile" onClose={onClose} subtitle="Your account on this device" />
 
       {/* -------------------------------------------------------- identity */}
@@ -158,6 +216,45 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
           </View>
         </View>
       </Card>
+
+      {!account.isGuest && (
+        <Card style={styles.group}>
+          <View style={styles.photoRow}>
+            <ActionButton
+              label={account.avatarUrl === null ? 'Add a photo' : 'Change photo'}
+              tone="secondary"
+              compact
+              icon="user"
+              onPress={() => void changePhoto()}
+              busy={photoBusy}
+              style={styles.photoAction}
+              testID="profile-change-photo"
+            />
+            {account.avatarUrl !== null && (
+              <ActionButton
+                label="Remove"
+                tone="secondary"
+                compact
+                onPress={() => void removePhoto()}
+                disabled={photoBusy}
+                style={styles.photoAction}
+                testID="profile-remove-photo"
+              />
+            )}
+          </View>
+          <AppText
+            variant="caption"
+            color={
+              photoStatus === null || photoStatus.startsWith('Photo')
+                ? palette.textMuted
+                : palette.danger
+            }
+          >
+            {photoStatus ??
+              'JPEG, PNG or WebP, up to 2 MB. The photo is visible to anyone who can see your profile.'}
+          </AppText>
+        </Card>
+      )}
 
       {account.profile?.status === 'suspended' ? (
         <Card style={styles.warning}>
@@ -245,20 +342,6 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
             />
           </Card>
 
-          <SectionHeader label="Photo" detail="Stored privately with your account." />
-          <Card style={styles.group}>
-            {/*
-              No upload control, because there is no picker in this build and a
-              button that opens nothing is worse than an explanation. The bucket
-              and its policy exist; the client-side picker does not.
-            */}
-            <AppText variant="caption" color={palette.textSecondary}>
-              {account.avatarUrl === null
-                ? 'No photo is set. Choosing one is not available in this build — the private storage bucket and its access rules exist on the server, but this app has no image picker yet, and adding one is a separate piece of work.'
-                : 'Your photo is stored in a private bucket. It is visible only to you and to the account service that serves it to you.'}
-            </AppText>
-          </Card>
-
           <SectionHeader label="Password" detail="Changed through the account provider, never here." />
           <Card style={styles.group}>
             <AppText variant="caption" color={palette.textSecondary}>
@@ -322,11 +405,11 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
       <Card style={styles.group}>
         <ListRow
           label="Email the team"
-          value="hello@sanketvaanni.in"
+          value="sanketvaanni@gmail.com"
           description="Questions, problems, or a request about your data."
           icon="link"
           onPress={() => {
-            void Linking.openURL('mailto:hello@sanketvaanni.in').catch(() => undefined);
+            void Linking.openURL('mailto:sanketvaanni@gmail.com').catch(() => undefined);
           }}
           last
         />
@@ -341,7 +424,19 @@ export function ProfileScreen({ onClose, onOpenAccount }: ProfileScreenProps): R
           'Synced with this account: your preferred sign profile, your output language, and your OLED layouts. Everything else — the theme, what is on screen, and any conversation — stays on the device you are holding.'
         }
       </AppText>
-    </Screen>
+      </Screen>
+
+      <DeleteAccountDialog
+        visible={deleting}
+        email={account.user?.email ?? account.profile?.email ?? null}
+        onDeleted={() => {
+          account.completeAccountDeletion();
+          setDeleting(false);
+          onClose();
+        }}
+        onCancel={() => setDeleting(false)}
+      />
+    </>
   );
 }
 
@@ -380,6 +475,13 @@ const makeStyles = (palette: Palette) =>
     },
     group: {
       gap: spacing.md,
+    },
+    photoRow: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+    },
+    photoAction: {
+      flex: 1,
     },
     meter: {
       height: 6,

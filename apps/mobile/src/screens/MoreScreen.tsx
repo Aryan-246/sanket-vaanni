@@ -8,6 +8,7 @@ import { Card } from '../components/Card';
 import { Icon } from '../components/Icon';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { ListRow } from '../components/ListRow';
+import { NoticesCard } from '../components/NoticesCard';
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -21,7 +22,8 @@ import type { SyncState } from '../supabase/types';
 import { layout as screenLayout, radii, spacing } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
 import { findOutputLanguage, type ThemeMode } from '../app/preferences';
-import { useAppState, usePushState } from '../app/AppState';
+import { useAppState, usePushState, useNoticesState } from '../app/AppState';
+import { describePushRow } from '../notifications/pushRow';
 
 const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: 'System', value: 'system' },
@@ -37,8 +39,6 @@ export interface MoreScreenProps {
   onOpenProfile?: () => void;
   /** Opens About Us. */
   onOpenAbout?: () => void;
-  /** Opens model management. */
-  onOpenMl?: () => void;
   /**
    * Opens the Super Admin section.
    *
@@ -69,7 +69,6 @@ export function MoreScreen({
   onOpenAudit,
   onOpenProfile,
   onOpenAbout,
-  onOpenMl,
   onOpenAdmin,
   onOpenAccount,
   initialRecoveryMode = false,
@@ -79,8 +78,22 @@ export function MoreScreen({
   const { preferences, updatePreferences, profile, speaker } = useAppState();
   const { push } = useAppState();
   const pushState = usePushState();
+  const { announcements } = useAppState();
+  const notices = useNoticesState();
   const account = useAccount();
   const build = useBuildFacts();
+
+  /*
+   * The recognition row used to live here.
+   *
+   * It read "Models and vocabulary", counted trained versions and reported the
+   * active one — and it was drawn for everybody, including a guest with no
+   * account. That was wrong in kind, not in degree: every control behind it
+   * trains, versions or activates a model, and none of those are a user's to
+   * perform. It now lives in the administration console, which is where those
+   * controls are authorised. Nothing here reads the learning centre any more, so
+   * this screen no longer subscribes to it at all.
+   */
 
   const [sheet, setSheet] = useState<'sign' | 'translation' | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(syncManager.getState());
@@ -129,28 +142,54 @@ export function MoreScreen({
   /**
    * What the notification switch is actually doing, in one sentence.
    *
-   * Three situations that a boolean would flatten into "on" are separated here,
-   * because "notifications are switched on" is not the same claim as
-   * "notifications will reach you". A guest's token is held by the phone and
-   * recorded against nobody, so there is no account for the server to address —
-   * and saying "on" without that would be the kind of half-truth this project
-   * keeps out of its screens.
+   * The wording lives in `../notifications/pushRow` and is tested there. It was
+   * a chain of `if`s on this screen until a real device showed the difference it
+   * was missing: the phone's own notification setting can be switched off — or
+   * withdrawn by Android — long after the user switched notifications on here,
+   * and the row went on saying they were on. The decision needs the platform's
+   * answer, so it is made where that answer is available and asserted, not in
+   * the middle of a layout.
    */
-  const pushDetail = useMemo(() => {
-    if (pushState.status === 'enabling') return 'Asking your phone for permission…';
-    // Any recorded failure is the most useful thing on this row, so it wins.
-    if (pushState.error !== null) return pushState.error;
-    if (!pushState.enabled) return 'Off. Nothing is delivered to this phone.';
-    if (pushState.registrationError !== null) return pushState.registrationError;
-    if (pushState.registeredAccountId === null) {
-      return 'On for this phone, but not linked to an account yet — so nothing can be addressed to you.';
-    }
-    return 'On, and linked to your account.';
-  }, [pushState]);
+  const pushDetail = useMemo(() => describePushRow(pushState), [pushState]);
+
+  /**
+   * Hiding a notice.
+   *
+   * Recorded on this device and nowhere else, which is why the card's own footer
+   * says so — a user who thinks a dismissal removes a warning for their whole
+   * team would have been misled by the interface, not by the copy.
+   */
+  const dismissNotice = useCallback(
+    (id: string) => {
+      announcements.dismiss(id);
+    },
+    [announcements],
+  );
+
+  /**
+   * Asking again after a failed notice check.
+   *
+   * The rejection is swallowed rather than left unhandled: the reader reports
+   * failure through its state, which is what the card renders, so a rejected
+   * promise here would be a second report of something already on screen.
+   */
+  const retryNotices = useCallback(() => {
+    announcements.refresh().catch(() => undefined);
+  }, [announcements]);
 
   return (
     <Screen scroll bottomInset={screenLayout.tabBarHeight} testID="more-screen">
       <BrandHeader title="Settings" showLanguages={false} onPressAvatar={onOpenAccount} />
+
+      {/*
+        * Notices sit above everything else on this screen, because a message an
+        * administrator published for everybody outranks the settings below it.
+        *
+        * It renders nothing at all when there is nothing to show — that decision
+        * lives in `announcements/reader.ts` and is tested there, rather than
+        * being spread across this layout.
+        */}
+      <NoticesCard state={notices} onDismiss={dismissNotice} onRetry={retryNotices} />
 
       {/* ----------------------------------------------- cloud & account */}
 
@@ -375,21 +414,6 @@ export function MoreScreen({
       </Card>
 
       {/* ----------------------------------------------------------- about */}
-
-      <SectionHeader label="Recognition" detail="What the glove is read against." />
-      <Card style={styles.group}>
-        {onOpenMl !== undefined && (
-          <ListRow
-            label="Models and vocabulary"
-            value="Not installed"
-            description="Which recognition models exist, what they cover, and what is missing."
-            icon="scan"
-            onPress={onOpenMl}
-            last
-            testID="models-row"
-          />
-        )}
-      </Card>
 
       <SectionHeader label="About" />
       <Card style={styles.group}>

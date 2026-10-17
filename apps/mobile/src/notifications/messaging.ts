@@ -36,6 +36,7 @@ import {
   getInitialNotification,
   getMessaging,
   getToken,
+  hasPermission,
   isSupported,
   onMessage,
   onNotificationOpenedApp,
@@ -127,6 +128,32 @@ function toPushMessage(message: RemoteMessage): PushMessage {
  */
 export async function requestNotificationPermission(): Promise<NotificationPermissionResult> {
   const status = await requestPermission(getMessaging());
+
+  if (status === AuthorizationStatus.AUTHORIZED || status === AuthorizationStatus.PROVISIONAL) {
+    return 'granted';
+  }
+  if (status === AuthorizationStatus.DENIED) return 'denied';
+  return 'blocked';
+}
+
+/**
+ * Whether the platform would deliver a notification to this install right now.
+ *
+ * This is the read that `requestNotificationPermission` cannot do: it asks, and
+ * asking is a thing the user is entitled to be present for. A settings screen
+ * needs the answer without the prompt, because the answer may have changed since
+ * the last time anybody asked — the user can switch notifications off in system
+ * settings at any time, and Android withdraws the permission on its own for apps
+ * it considers unused. A stored `enabled: true` records what the user chose, not
+ * what the phone will now do with it, and the two come apart silently.
+ *
+ * On Android this asks `NotificationManagerCompat.areNotificationsEnabled()`,
+ * which is the value the system itself consults before posting — so it is true
+ * whether notifications were refused at the permission prompt or switched off
+ * later in Settings, and there is no second state to reconcile.
+ */
+export async function hasNotificationPermission(): Promise<NotificationPermissionResult> {
+  const status = await hasPermission(getMessaging());
 
   if (status === AuthorizationStatus.AUTHORIZED || status === AuthorizationStatus.PROVISIONAL) {
     return 'granted';

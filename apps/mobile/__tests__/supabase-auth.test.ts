@@ -1,12 +1,16 @@
+import { Linking } from 'react-native';
+
 import {
-  deleteCurrentAccount,
   getCurrentSession,
   requestPasswordReset,
+  resendConfirmationEmail,
   signInWithEmail,
+  signInWithGoogle,
   signOut,
   signUpWithEmail,
   subscribeToAuthState,
   updatePassword,
+  verifyEmailCode,
 } from '../src/supabase/auth';
 import { resetSupabaseClient, setCustomSupabaseClient, setSupabaseDisabledForTesting } from '../src/supabase/client';
 
@@ -21,6 +25,9 @@ describe('Supabase Auth Module', () => {
         signOut: jest.fn(),
         resetPasswordForEmail: jest.fn(),
         updateUser: jest.fn(),
+        resend: jest.fn(),
+        verifyOtp: jest.fn(),
+        signInWithOAuth: jest.fn(),
         getSession: jest.fn(),
         onAuthStateChange: jest.fn().mockReturnValue({
           data: {
@@ -58,6 +65,7 @@ describe('Supabase Auth Module', () => {
         email: 'test@example.com',
         password: 'secret123',
         options: {
+          emailRedirectTo: 'sanketvaani://auth-callback',
           data: { display_name: 'Signer Aryan' },
         },
       });
@@ -193,25 +201,135 @@ describe('Supabase Auth Module', () => {
     });
   });
 
-  describe('deleteCurrentAccount', () => {
-    it('calls delete_user_account RPC and signs out', async () => {
-      mockSupabase.rpc.mockResolvedValue({ error: null });
-      mockSupabase.auth.signOut.mockResolvedValue({ error: null });
+  describe('resending a confirmation email', () => {
+    it('asks the provider to resend, pointing at the app callback', async () => {
+      mockSupabase.auth.resend.mockResolvedValue({ error: null });
 
-      const res = await deleteCurrentAccount();
+      const res = await resendConfirmationEmail('  Pending@Example.com ');
+
       expect(res.success).toBe(true);
-      expect(mockSupabase.rpc).toHaveBeenCalledWith('delete_user_account');
-      expect(mockSupabase.auth.signOut).toHaveBeenCalled();
+      expect(mockSupabase.auth.resend).toHaveBeenCalledWith({
+        type: 'signup',
+        email: 'pending@example.com',
+        options: { emailRedirectTo: 'sanketvaani://auth-callback' },
+      });
     });
 
-    it('handles RPC errors gracefully', async () => {
-      mockSupabase.rpc.mockResolvedValue({
-        error: { message: 'Database error deleting user' },
+    it('recognises the provider rate-limit code even without the usual sentence', async () => {
+      mockSupabase.auth.resend.mockResolvedValue({
+        error: { message: 'Request refused', code: 'over_email_send_rate_limit' },
       });
 
-      const res = await deleteCurrentAccount();
+      const res = await resendConfirmationEmail('pending@example.com');
+
       expect(res.success).toBe(false);
-      expect(res.error).toContain('Database error deleting user');
+      expect(res.error).toContain('Too many attempts');
+    });
+
+    it('shows the provider rate limit rather than pretending it sent', async () => {
+      mockSupabase.auth.resend.mockResolvedValue({
+        error: { message: 'For security purposes, you can only request this after 43 seconds.' },
+      });
+
+      const res = await resendConfirmationEmail('pending@example.com');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('too recently');
+    });
+  });
+
+  describe('confirming with an emailed code', () => {
+    it('verifies the same signup token and returns the session', async () => {
+      const session = { access_token: 'tok', user: { id: 'u-1' } };
+      mockSupabase.auth.verifyOtp.mockResolvedValue({
+        data: { user: { id: 'u-1' }, session },
+        error: null,
+      });
+
+      const res = await verifyEmailCode('Pending@Example.com', ' 123456 ');
+
+      expect(res.success).toBe(true);
+      expect(res.data?.session).toEqual(session);
+      expect(mockSupabase.auth.verifyOtp).toHaveBeenCalledWith({
+        email: 'pending@example.com',
+        token: '123456',
+        type: 'signup',
+      });
+    });
+
+    it('does not spend a request on something that is not a six-digit code', async () => {
+      const res = await verifyEmailCode('pending@example.com', '12345');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('six-digit');
+      expect(mockSupabase.auth.verifyOtp).not.toHaveBeenCalled();
+    });
+
+    it('maps an expired token to an instruction, not a raw provider string', async () => {
+      mockSupabase.auth.verifyOtp.mockResolvedValue({
+        data: { user: null, session: null },
+        error: { message: 'Token has expired or is invalid' },
+      });
+
+      const res = await verifyEmailCode('pending@example.com', '123456');
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('no longer valid');
+    });
+  });
+
+  describe('Google sign-in', () => {
+    it('opens the provider URL in the browser and passes no secret', async () => {
+      const open = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+      mockSupabase.auth.signInWithOAuth.mockResolvedValue({
+        data: { url: 'https://project.supabase.co/auth/v1/authorize?provider=google' },
+        error: null,
+      });
+
+      const res = await signInWithGoogle();
+
+      expect(res.success).toBe(true);
+      expect(mockSupabase.auth.signInWithOAuth).toHaveBeenCalledWith({
+        provider: 'google',
+        options: {
+          redirectTo: 'sanketvaani://auth-callback',
+          skipBrowserRedirect: true,
+        },
+      });
+      // The whole options object is the assertion: no client secret, no second
+      // credential, and nothing that would put a provider key in this bundle.
+      expect(open).toHaveBeenCalledWith(
+        'https://project.supabase.co/auth/v1/authorize?provider=google',
+      );
+      open.mockRestore();
+    });
+
+    it('explains a provider that is not enabled on the project', async () => {
+      mockSupabase.auth.signInWithOAuth.mockResolvedValue({
+        data: { url: null },
+        error: { message: 'Unsupported provider: provider is not enabled' },
+      });
+
+      const res = await signInWithGoogle();
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('not enabled');
+    });
+
+    it('reports a browser that would not open instead of leaving a dead button', async () => {
+      const open = jest
+        .spyOn(Linking, 'openURL')
+        .mockRejectedValue(new Error('No activity found to handle Intent'));
+      mockSupabase.auth.signInWithOAuth.mockResolvedValue({
+        data: { url: 'https://project.supabase.co/auth/v1/authorize?provider=google' },
+        error: null,
+      });
+
+      const res = await signInWithGoogle();
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('browser could not be opened');
+      open.mockRestore();
     });
   });
 

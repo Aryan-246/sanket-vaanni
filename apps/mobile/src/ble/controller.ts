@@ -80,6 +80,14 @@ export interface GloveControllerOptions {
 
 export type GloveListener = (snapshot: GloveSnapshot) => void;
 
+/**
+ * Receives every calibrated frame, at the transport's own rate.
+ *
+ * Used by recording and by live inference, both of which need the frames the
+ * throttled snapshot stream would drop.
+ */
+export type FrameListener = (sample: SensorSample) => void;
+
 export class GloveController {
   readonly side: GloveSide;
 
@@ -101,6 +109,7 @@ export class GloveController {
   #sampleUnsub: Unsubscribe | null = null;
   #disposed = false;
   #paused = false;
+  readonly #frameListeners = new Set<FrameListener>();
 
   #snapshot: GloveSnapshot;
 
@@ -127,6 +136,25 @@ export class GloveController {
     this.#listeners.add(listener);
     return () => {
       this.#listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Every calibrated frame, at the transport's own rate.
+   *
+   * Separate from `subscribe` on purpose. `subscribe` is throttled to `uiHz`
+   * because React does not need 20 renders a second — but a *recording* does
+   * need every frame. Reconstructing a window from the throttled stream would
+   * silently drop roughly two frames in five, and the resampling in
+   * `ml/window.ts` would then interpolate across gaps that the glove never had.
+   *
+   * Nothing is notified when the controller is paused: a paused controller is
+   * not producing data, and a recorder must not hold a frozen stream.
+   */
+  onFrame(listener: FrameListener): Unsubscribe {
+    this.#frameListeners.add(listener);
+    return () => {
+      this.#frameListeners.delete(listener);
     };
   }
 
@@ -252,6 +280,7 @@ export class GloveController {
 
     this.#pipeline.reset();
     this.#listeners.clear();
+    this.#frameListeners.clear();
   }
 
   /** True when the last packet is recent enough to be considered live. */
@@ -297,6 +326,13 @@ export class GloveController {
     this.#packetCount += 1;
     this.#lastPacketAtMs = this.#now();
 
+    /*
+     * Every frame goes to the frame listeners, before the throttle below. A
+     * recorder that only saw the throttled stream would be missing frames.
+     */
+    const frame = this.#calibrated;
+    for (const listener of this.#frameListeners) listener(frame);
+
     const now = this.#now();
     if (now - this.#lastEmitMs >= this.#minEmitIntervalMs) {
       this.#lastEmitMs = now;
@@ -314,15 +350,31 @@ export class GloveController {
   /**
    * Rebuilds the snapshot and notifies.
    *
-   * A new object is only created when it is actually going to be published, so
-   * `getSnapshot` stays referentially stable between changes — which is what
-   * `useSyncExternalStore` requires to avoid an infinite render loop.
+   * The rebuild happens whether or not anyone is subscribed to the throttled
+   * channel, and the notification is what the early return skips.
+   *
+   * That order matters. `getSnapshot` is a public read, and it is read from
+   * outside React: `AppState`'s `gloveInfo` calls it to decide whether a glove
+   * is delivering data, which is what lets the learning centre open a recording
+   * session. Skipping the rebuild when `#listeners` was empty would leave that
+   * decision reading a snapshot from the last status change — so a streaming
+   * glove would report `source: 'none'` while no React component happened to be
+   * subscribed, and "Start a recording session" would refuse on a working glove.
+   * That is reachable: the dashboard unmounts when a detail screen is pushed, and
+   * the learning centre *is* a detail screen.
+   *
+   * A new object is only created when the snapshot is actually going to change
+   * or be published, so `getSnapshot` stays referentially stable between
+   * notifying changes — which is what `useSyncExternalStore` requires to avoid an
+   * infinite render loop. The caller in `#handleSample` applies the throttle, so
+   * this still runs at most `uiHz` times a second.
    */
   #emit(force: boolean): void {
     if (this.#disposed) return;
-    if (!force && this.#listeners.size === 0) return;
 
     this.#snapshot = this.#buildSnapshot();
+    if (!force && this.#listeners.size === 0) return;
+
     for (const listener of this.#listeners) {
       listener(this.#snapshot);
     }

@@ -55,6 +55,7 @@ function makeBridge(overrides: Partial<PushBridge> = {}): FakeBridge {
     unavailableReason: () => 'This build has no Firebase configuration, so push notifications cannot be delivered to it.',
     isDeviceSupported: async () => true,
     requestPermission: async () => 'granted',
+    hasPermission: async () => 'granted',
     getToken: async () => 'tok-1',
     deleteToken: async () => undefined,
     onForegroundMessage: (handler) => {
@@ -351,5 +352,77 @@ describe('what survives a restart', () => {
 
     const stored = await storage.getJson<{ enabled: boolean }>(PUSH_STORAGE_KEY);
     expect(stored?.enabled).toBe(true);
+  });
+
+  /*
+   * The stored setting is what the user chose; it is not evidence about the
+   * phone. A real device was found with notifications switched on in this app
+   * and `POST_NOTIFICATIONS: granted=false` in its package record.
+   */
+  it('re-asks the platform rather than assuming a stored setting still holds', async () => {
+    const storage = createInMemoryStorage();
+    const first = new PushController({ storage, bridge: makeBridge() });
+    await settle();
+    await first.setAccount('user-a');
+    await first.enable();
+    await settle();
+    first.dispose();
+
+    const hasPermission = jest.fn(async () => 'denied' as const);
+    const restored = new PushController({ storage, bridge: makeBridge({ hasPermission }) });
+    await settle();
+
+    expect(hasPermission).toHaveBeenCalled();
+    expect(restored.getSnapshot().permission).toBe('denied');
+    // The switch stays where the user left it. Flipping it here would be the app
+    // silently overruling a setting it cannot itself restore.
+    expect(restored.getSnapshot().enabled).toBe(true);
+  });
+
+  it('does not raise a prompt while restoring, only a read', async () => {
+    // Restoring happens at launch. A permission prompt there would arrive before
+    // the user knows what the app would notify them about — the one case the
+    // module's own note says must never happen.
+    const storage = createInMemoryStorage();
+    const first = new PushController({ storage, bridge: makeBridge() });
+    await settle();
+    await first.enable();
+    await settle();
+    first.dispose();
+
+    const requestPermission = jest.fn(async () => 'granted' as const);
+    const restored = new PushController({
+      storage,
+      bridge: makeBridge({ requestPermission, hasPermission: async () => 'granted' }),
+    });
+    await settle();
+
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(restored.getSnapshot().permission).toBe('granted');
+  });
+
+  it('records an unreadable permission as unknown, not as a refusal', async () => {
+    // Something that threw has said nothing. Reporting it as denied would put
+    // "your phone is blocking notifications" on screen for a reason the user
+    // cannot act on.
+    const storage = createInMemoryStorage();
+    const first = new PushController({ storage, bridge: makeBridge() });
+    await settle();
+    await first.enable();
+    await settle();
+    first.dispose();
+
+    const restored = new PushController({
+      storage,
+      bridge: makeBridge({
+        hasPermission: async () => {
+          throw new Error('no such native module');
+        },
+      }),
+    });
+    await settle();
+
+    expect(restored.getSnapshot().permission).toBe('unknown');
+    expect(restored.getSnapshot().enabled).toBe(true);
   });
 });

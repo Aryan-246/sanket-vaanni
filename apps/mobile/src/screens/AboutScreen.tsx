@@ -18,7 +18,7 @@
  * placeholders. The section says so on screen, so a reader is not left wondering
  * whether the app failed to load something.
  */
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 
 import { ActionButton } from '../components/ActionButton';
@@ -29,7 +29,12 @@ import { DetailHeader } from '../components/DetailHeader';
 import { Icon } from '../components/Icon';
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
-import { TEAM_MEMBERS, isMemberUnfilled, type TeamMember } from '../about/team';
+import { TEAM_MEMBERS, isMemberUnfilled } from '../about/team';
+import {
+  fetchTeamContent,
+  teamPhotoUrl,
+  type PublishedTeamMember,
+} from '../about/teamContent';
 import { PRODUCT_NAME, PRODUCT_NAME_DEVANAGARI } from '../config/app';
 import { useBuildFacts } from '../hooks/useBuildFacts';
 import { useAppState, useSpeechState } from '../app/AppState';
@@ -50,7 +55,49 @@ export function AboutScreen({ onClose }: AboutScreenProps): React.JSX.Element {
   const speech = useSpeechState();
   const build = useBuildFacts();
 
+  /*
+   * Published team content, read from the public endpoint. While it is loading
+   * or unavailable, the five empty slots are shown exactly as before — they are
+   * the honest representation of "nothing has been published", never a
+   * placeholder that imitates a real person.
+   */
+  const [members, setMembers] = useState<PublishedTeamMember[] | null>(null);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [teamLoading, setTeamLoading] = useState(true);
+
+  const loadTeam = useCallback(async (signal?: AbortSignal) => {
+    setTeamLoading(true);
+    const result = await fetchTeamContent(signal);
+    if (signal?.aborted) return;
+    setTeamLoading(false);
+    if (!result.ok) {
+      // An empty error means the caller aborted; nothing to display.
+      if (result.error === '') return;
+      setTeamError(result.error);
+      return;
+    }
+    setTeamError(null);
+    setMembers(result.members);
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadTeam(controller.signal);
+    return () => controller.abort();
+  }, [loadTeam]);
+
+  const published = members ?? [];
   const unfilledCount = TEAM_MEMBERS.filter(isMemberUnfilled).length;
+
+  const teamDetail = (() => {
+    if (teamLoading && members === null) return 'Loading published details';
+    if (published.length > 0) {
+      return `${published.length} ${published.length === 1 ? 'person' : 'people'} listed`;
+    }
+    return unfilledCount === TEAM_MEMBERS.length
+      ? 'Five roles, not yet filled in'
+      : `${TEAM_MEMBERS.length - unfilledCount} of ${TEAM_MEMBERS.length} listed`;
+  })();
 
   return (
     <Screen scroll testID="about-screen">
@@ -58,28 +105,59 @@ export function AboutScreen({ onClose }: AboutScreenProps): React.JSX.Element {
 
       {/* ------------------------------------------------------------- team */}
 
-      <SectionHeader
-        label="Team"
-        detail={
-          unfilledCount === TEAM_MEMBERS.length
-            ? 'Five roles, not yet filled in'
-            : `${TEAM_MEMBERS.length - unfilledCount} of ${TEAM_MEMBERS.length} listed`
-        }
-      />
+      <SectionHeader label="Team" detail={teamDetail} />
 
       <Card style={styles.group}>
-        {TEAM_MEMBERS.map((member, index) => (
-          <TeamRow key={member.id} member={member} last={index === TEAM_MEMBERS.length - 1} />
-        ))}
+        {published.length > 0
+          ? published.map((member, index) => (
+              <TeamRow
+                key={member.id}
+                name={member.name}
+                role={member.role}
+                bio={member.bio.length > 0 ? member.bio : null}
+                photoUrl={teamPhotoUrl(member.photo_path)}
+                last={index === published.length - 1}
+              />
+            ))
+          : TEAM_MEMBERS.map((member, index) => (
+              <TeamRow
+                key={member.id}
+                name={member.name}
+                role={member.role}
+                bio={member.bio}
+                photoUrl={null}
+                last={index === TEAM_MEMBERS.length - 1}
+              />
+            ))}
       </Card>
 
-      {unfilledCount > 0 ? (
+      {teamError !== null ? (
+        <Card sunken style={styles.note}>
+          <Icon name="warning" size={14} color={palette.warning} />
+          <View style={styles.noteText}>
+            <AppText variant="caption" color={palette.textSecondary}>
+              {teamError}
+            </AppText>
+            <ActionButton
+              label="Try again"
+              tone="ghost"
+              compact
+              onPress={() => void loadTeam()}
+              testID="about-team-retry"
+            />
+          </View>
+        </Card>
+      ) : null}
+
+      {published.length === 0 ? (
         <Card sunken style={styles.note}>
           <Icon name="info" size={14} color={palette.textMuted} />
           <AppText variant="caption" color={palette.textMuted} style={styles.noteText}>
-            {unfilledCount === TEAM_MEMBERS.length
-              ? 'No team member details have been provided. Names, roles, biographies and photographs are not invented to fill this space — they are added when the people themselves supply them.'
-              : 'The remaining slots are unfilled. Their details are not invented to fill the space.'}
+            {members !== null
+              ? 'No team member details have been published yet. Names, roles, biographies and photographs are not invented to fill this space — an administrator adds them when the people themselves supply them.'
+              : unfilledCount === TEAM_MEMBERS.length
+                ? 'No team member details have been provided. Names, roles, biographies and photographs are not invented to fill this space — they are added when the people themselves supply them.'
+                : 'The remaining slots are unfilled. Their details are not invented to fill the space.'}
           </AppText>
         </Card>
       ) : null}
@@ -194,7 +272,7 @@ export function AboutScreen({ onClose }: AboutScreenProps): React.JSX.Element {
         tone="ghost"
         icon="link"
         onPress={() => {
-          void Linking.openURL('mailto:hello@sanketvaanni.in').catch(() => undefined);
+          void Linking.openURL('mailto:sanketvaanni@gmail.com').catch(() => undefined);
         }}
         accessibilityLabel="Email the team"
         accessibilityHint="Opens your email app with the team's address"
@@ -209,30 +287,42 @@ export function AboutScreen({ onClose }: AboutScreenProps): React.JSX.Element {
 
 /* --------------------------------------------------------------- sub-parts */
 
-function TeamRow({ member, last }: { member: TeamMember; last: boolean }): React.JSX.Element {
+function TeamRow({
+  name,
+  role,
+  bio,
+  photoUrl,
+  last,
+}: {
+  name: string | null;
+  role: string | null;
+  bio: string | null;
+  photoUrl: string | null;
+  last: boolean;
+}): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
-  const unfilled = isMemberUnfilled(member);
+  const filled = name !== null || role !== null;
 
   return (
     <View style={[styles.row, !last && styles.rowDivided]}>
       {/*
         `Avatar` renders initials from the name when there is one and a neutral
-        glyph when there is not — it never substitutes a stock portrait. An
-        unfilled slot therefore looks like a slot, which is the honest rendering.
+        glyph when there is not — it never substitutes a stock portrait. A
+        published portrait is shown from the public team-media URL.
       */}
-      <Avatar name={member.name} uri={null} size={44} />
+      <Avatar name={name} uri={photoUrl} size={44} />
 
       <View style={styles.rowText}>
-        <AppText variant="body" color={unfilled ? palette.textMuted : palette.textPrimary}>
-          {member.name ?? 'Name to be added'}
+        <AppText variant="body" color={filled ? palette.textPrimary : palette.textMuted}>
+          {name ?? 'Name to be added'}
         </AppText>
         <AppText variant="caption" color={palette.textMuted}>
-          {member.role ?? (unfilled ? 'Role to be added' : 'Role not stated')}
+          {role ?? (filled ? 'Role not stated' : 'Role to be added')}
         </AppText>
-        {member.bio === null ? null : (
+        {bio === null ? null : (
           <AppText variant="caption" color={palette.textSecondary}>
-            {member.bio}
+            {bio}
           </AppText>
         )}
       </View>

@@ -21,6 +21,7 @@
  */
 import { config } from '../config/env';
 import { getSupabaseClient } from '../supabase/client';
+import type { BulkRowResult } from './bulkEntry';
 import type {
   AdminAuditRow,
   AnnouncementRow,
@@ -41,6 +42,40 @@ export type AdminResult<T> = { ok: true; data: T } | { ok: false; error: string;
 /** How many rows the list endpoints return per page. */
 export const ADMIN_PAGE_SIZE = 25;
 
+/** How many audit rows a page holds. Larger, because the log is read in bulk. */
+export const AUDIT_PAGE_SIZE = 50;
+
+/**
+ * Which audit rows to ask for.
+ *
+ * Every field is optional and an absent one means "do not filter". They are
+ * named the way the API names them rather than the way a screen labels them, so
+ * the mapping from a control to a query parameter stays visible in one place.
+ */
+export interface AdminAuditFilters {
+  readonly action?: string;
+  readonly outcome?: 'requested' | 'succeeded' | 'failed';
+  readonly actor?: string;
+  readonly targetType?: string;
+  /** One account's history: every action taken against it. */
+  readonly targetId?: string;
+  readonly from?: string;
+  readonly to?: string;
+}
+
+/** Who last changed the maintenance setting, if anyone is recorded. */
+export interface MaintenanceChangedBy {
+  readonly id: string;
+  /**
+   * Null when the address could not be read, which covers two cases the payload
+   * does not separate: a profile with no email, and a lookup that failed. The
+   * server resolves the recorded id against `profiles` on every read and reports
+   * a failure as unresolved rather than failing the whole read, so the screen
+   * must not phrase this as a deletion — see `actorLine` in `./auditEntry`.
+   */
+  readonly email: string | null;
+}
+
 export interface AdminUserSummary {
   readonly id: string;
   readonly email: string | null;
@@ -56,6 +91,22 @@ export interface AdminUserPage {
   readonly page: number;
   readonly perPage: number;
   readonly total: number;
+}
+
+/**
+ * What a bulk action answers with.
+ *
+ * `results` is the part the screen must read: one entry per account the service
+ * reported on, in the order they were submitted. `succeeded` and `failed` are
+ * the service's own tally and are not trusted here — `bulkEntry.ts` counts the
+ * rows instead, so the sentence and the list can never disagree.
+ */
+export interface AdminBulkResult {
+  readonly results: readonly BulkRowResult[];
+  readonly succeeded: number;
+  readonly failed: number;
+  /** The state that was applied, echoed back so the caller cannot mislabel it. */
+  readonly suspended: boolean;
 }
 
 /* ------------------------------------------------------------------ request */
@@ -76,7 +127,7 @@ async function accessToken(): Promise<string | null> {
 }
 
 async function call<T>(
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body?: Record<string, unknown>,
   signal?: AbortSignal,
@@ -194,11 +245,43 @@ export function readUser(
   );
 }
 
+/**
+ * The query string for an audit read.
+ *
+ * Exported and pure so the mapping from a filter to a parameter can be tested
+ * without a network, a session, or a configured backend URL. That last part
+ * matters more than it looks: `config.apiBaseUrl` comes from a gitignored
+ * `.env`, so a test that went through `call` would pass on a developer's machine
+ * and fail on a fresh clone — and it would be asserting an environment fact
+ * rather than this mapping.
+ *
+ * Only the filters that are set are sent, so the URL says what was actually
+ * asked for. An empty string is indistinguishable from "no filter" on the server
+ * — where it is deliberately ignored — but a request carrying `action=` would
+ * suggest otherwise to anyone reading a log.
+ */
+export function auditQueryString(page: number, filters: AdminAuditFilters = {}): string {
+  const query = new URLSearchParams();
+  query.set('page', String(page));
+  query.set('perPage', String(AUDIT_PAGE_SIZE));
+
+  if (filters.action) query.set('action', filters.action);
+  if (filters.outcome) query.set('outcome', filters.outcome);
+  if (filters.actor?.trim()) query.set('actor', filters.actor.trim());
+  if (filters.targetType) query.set('targetType', filters.targetType);
+  if (filters.targetId) query.set('targetId', filters.targetId);
+  if (filters.from) query.set('from', filters.from);
+  if (filters.to) query.set('to', filters.to);
+
+  return query.toString();
+}
+
 export function listAudit(
   page: number,
+  filters: AdminAuditFilters = {},
   signal?: AbortSignal,
 ): Promise<AdminResult<{ entries: readonly AdminAuditRow[]; total: number; page: number }>> {
-  return call('GET', `/admin/audit?page=${page}&perPage=50`, undefined, signal);
+  return call('GET', `/admin/audit?${auditQueryString(page, filters)}`, undefined, signal);
 }
 
 export function listAnnouncements(
@@ -207,9 +290,38 @@ export function listAnnouncements(
   return call('GET', '/admin/announcements', undefined, signal);
 }
 
-export function readMaintenance(
+/**
+ * The counts and recent activity behind the overview.
+ *
+ * The payload is deliberately not typed as `OverviewFigures` here. This function
+ * returns what the service said; `parseOverview` decides whether that is
+ * anything this screen can stand behind, and a type assertion at this point
+ * would move the question to a place that cannot answer it.
+ */
+export function readOverview(
   signal?: AbortSignal,
-): Promise<AdminResult<{ maintenance: MaintenanceSetting | null; updatedAt: string | null }>> {
+): Promise<AdminResult<unknown>> {
+  return call<unknown>('GET', '/admin/overview', undefined, signal);
+}
+
+/** Whether each component is configured, and whether it has ever worked. */
+export function readHealth(signal?: AbortSignal): Promise<AdminResult<unknown>> {
+  return call<unknown>('GET', '/admin/health', undefined, signal);
+}
+
+export function readMaintenance(signal?: AbortSignal): Promise<
+  AdminResult<{
+    maintenance: MaintenanceSetting | null;
+    updatedAt: string | null;
+    /**
+     * Who last changed it. Null means no administrator is recorded — the seeded
+     * row, or one whose administrator has since been deleted. It does not mean
+     * "unchanged": `updatedAt` answers that, and the screen must not collapse
+     * the two into one statement.
+     */
+    updatedBy: MaintenanceChangedBy | null;
+  }>
+> {
   return call('GET', '/admin/maintenance', undefined, signal);
 }
 
@@ -246,6 +358,31 @@ export function setRole(params: {
 }
 
 /**
+ * Applies one status change to several accounts at once.
+ *
+ * The selection is sent as it stands and the answer is read per account, because
+ * the backend reports a partial result rather than rolling one back: an account
+ * can be refused by the database's own constraints while its neighbours are not.
+ * Reading only `succeeded` here would throw away the half of the answer that
+ * says which accounts are still unchanged — see `bulkEntry.ts`, which is where
+ * that decision is made and tested.
+ *
+ * No `actorId` is sent. The actor is the token's subject, and offering a field
+ * for it would invite a client that sets it.
+ */
+export function setBulkSuspension(params: {
+  userIds: readonly string[];
+  suspended: boolean;
+  reason: string;
+}): Promise<AdminResult<AdminBulkResult>> {
+  return call('POST', '/admin/users/bulk', {
+    userIds: [...params.userIds],
+    suspended: params.suspended,
+    reason: params.reason,
+  });
+}
+
+/**
  * Asks the backend to have the account's own password reset email sent.
  *
  * The result says `requested`, and the screen must say the same. Whether the
@@ -267,23 +404,58 @@ export function createAnnouncement(params: {
   severity: AnnouncementSeverity;
   published: boolean;
   reason: string;
-}): Promise<AdminResult<{ announcement: AnnouncementRow }>> {
+  /**
+   * When it stops being shown, or null for "never".
+   *
+   * Sent as the string the administrator typed, because the server is what
+   * decides whether a date is readable and whether it has already passed — the
+   * same rule applied to every client, rather than one this screen would have to
+   * re-implement and keep in step.
+   */
+  expiresAt?: string | null;
+}): Promise<AdminResult<{ announcement: AnnouncementRow; dispatch?: unknown }>> {
   return call('POST', '/admin/announcements', {
     title: params.title,
     body: params.body,
     severity: params.severity,
     published: params.published,
     reason: params.reason,
+    expiresAt: params.expiresAt ?? null,
   });
 }
 
 export function updateAnnouncement(params: {
   id: string;
-  patch: { published?: boolean; title?: string; body?: string };
+  patch: { published?: boolean; title?: string; body?: string; expiresAt?: string | null };
   reason: string;
-}): Promise<AdminResult<{ announcement: AnnouncementRow }>> {
+}): Promise<AdminResult<{ announcement: AnnouncementRow; dispatch?: unknown }>> {
   return call('POST', `/admin/announcements/${encodeURIComponent(params.id)}`, {
     ...params.patch,
+    reason: params.reason,
+  });
+}
+
+/**
+ * Asks the service to send a published announcement to the registered devices
+ * again.
+ *
+ * The automatic send happens once, on the transition into published. This is the
+ * deliberate second attempt for the case where that one could not run — and it
+ * is deliberate rather than automatic on purpose: a retry that runs on a timer
+ * sends a real notification to real people, and a notice that keeps arriving
+ * because a background job is unhappy is worse than one that arrived once and
+ * was never confirmed.
+ *
+ * `dispatch` is left untyped for the same reason the overview's payload is: the
+ * decision about whether it is a report this screen can stand behind belongs to
+ * `dispatchReport.ts`, and a type assertion here would move that question to a
+ * place that cannot answer it.
+ */
+export function redispatchAnnouncement(params: {
+  id: string;
+  reason: string;
+}): Promise<AdminResult<{ announcement: unknown; dispatch?: unknown }>> {
+  return call('POST', `/admin/announcements/${encodeURIComponent(params.id)}/dispatch`, {
     reason: params.reason,
   });
 }
@@ -299,5 +471,66 @@ export function setMaintenance(params: {
     message: params.message,
     reason: params.reason,
     expectedEndAt: params.expectedEndAt ?? null,
+  });
+}
+
+/* ------------------------------------------------------------- team content */
+
+/**
+ * A team row as the service returns it.
+ *
+ * Kept in the service's own snake_case rather than remapped. The mobile editor
+ * displays exactly the fields the database holds, and a second naming layer
+ * here would be one more place for `photo_path` and `photoPath` to be confused
+ * — the mismatch that puts the wrong portrait on a person.
+ */
+export interface AdminTeamMember {
+  readonly id: string;
+  readonly name: string;
+  readonly role: string;
+  readonly bio: string;
+  readonly photo_path: string | null;
+  readonly sort_order: number;
+  readonly published: boolean;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface TeamMemberInput {
+  name: string;
+  role: string;
+  bio?: string;
+  photoPath?: string | null;
+  sortOrder?: number;
+  published?: boolean;
+}
+
+export function listTeam(signal?: AbortSignal): Promise<AdminResult<{ members: AdminTeamMember[] }>> {
+  return call('GET', '/admin/team', undefined, signal);
+}
+
+export function createTeamMember(
+  input: TeamMemberInput & { reason: string },
+): Promise<AdminResult<{ member: AdminTeamMember }>> {
+  return call('POST', '/admin/team', { ...input });
+}
+
+export function updateTeamMember(params: {
+  id: string;
+  patch: Omit<TeamMemberInput, 'name' | 'role'> & { name?: string; role?: string };
+  reason: string;
+}): Promise<AdminResult<{ member: AdminTeamMember; cleanup: string | null }>> {
+  return call('PATCH', `/admin/team/${encodeURIComponent(params.id)}`, {
+    ...params.patch,
+    reason: params.reason,
+  });
+}
+
+export function deleteTeamMember(params: {
+  id: string;
+  reason: string;
+}): Promise<AdminResult<{ deleted: true; cleanup: string | null }>> {
+  return call('DELETE', `/admin/team/${encodeURIComponent(params.id)}`, {
+    reason: params.reason,
   });
 }

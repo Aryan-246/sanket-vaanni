@@ -32,6 +32,10 @@ import { CaptionsController } from '../captions';
 import type { CaptionsState } from '../captions';
 import { MaintenanceController } from '../maintenance';
 import type { MaintenanceState } from '../maintenance';
+import { createIdFactory, MlCentre } from '../ml';
+import { UnavailablePicker } from '../ml/media';
+import { AnnouncementsReader } from '../announcements';
+import type { AnnouncementsState } from '../announcements';
 import { PushController } from '../notifications';
 import type { PushState } from '../notifications';
 import { createAsyncStorage, type Storage } from '../storage';
@@ -73,6 +77,16 @@ export interface AppStateValue {
    */
   readonly maintenance: MaintenanceController;
   /**
+   * Notices — published announcements, and which of them this device dismissed.
+   *
+   * Read from `announcements` under the policy that makes published rows readable
+   * by `anon` as well as `authenticated`, so a guest who has never signed in
+   * still sees them. It cannot send anything: nothing dispatches an announcement
+   * as a notification, and `components/NoticesCard.tsx` says so on screen. See
+   * `announcements/reader.ts`.
+   */
+  readonly announcements: AnnouncementsReader;
+  /**
    * Push notifications.
    *
    * Holds this install's Firebase registration token and which account it is
@@ -81,6 +95,20 @@ export interface AppStateValue {
    * client one.
    */
   readonly push: PushController;
+  /**
+   * The learning centre.
+   *
+   * Owns the sample store, the window recorder and live inference, and is
+   * subscribed to every calibrated frame from both gloves. It is constructed
+   * here rather than in the screen for the same reason the glove controllers
+   * are: the recorder has to survive the screen being closed, or a window being
+   * recorded would be thrown away by navigating away from it.
+   *
+   * It does not know which account is signed in — the account provider is
+   * mounted *inside* this one. `MlAccountSync` in `RootNavigator.tsx` tells it,
+   * the same way `PushAccountSync` tells the push controller.
+   */
+  readonly ml: MlCentre;
   readonly translator: Translator;
   readonly recognitionAvailable: boolean;
   readonly recognitionUnavailableReason: string | null;
@@ -236,6 +264,21 @@ export function AppStateProvider({
   const maintenance = useMemo(() => new MaintenanceController(activeStorage), [activeStorage]);
 
   /**
+   * Notices — the announcements an administrator has published.
+   *
+   * Constructed here, beside maintenance, because it is the same kind of thing: a
+   * read of public server state that has to work before anyone signs in, cached
+   * so an offline launch still knows what it last saw. It reads the database
+   * directly under the announcements policy, not through the admin API — see
+   * `../announcements/reader.ts` for why that is the only way a guest can see a
+   * notice at all.
+   */
+  const announcements = useMemo(
+    () => new AnnouncementsReader({ storage: activeStorage }),
+    [activeStorage],
+  );
+
+  /**
    * Push notifications.
    *
    * Constructed eagerly, like captions, because its constructor is what asks the
@@ -249,6 +292,53 @@ export function AppStateProvider({
    */
   const push = useMemo(() => new PushController({ storage: activeStorage }), [activeStorage]);
 
+  /**
+   * The learning centre.
+   *
+   * Built once and held in a ref, like the glove controllers, rather than in a
+   * `useMemo`. That is not a style choice: the recorder holds a session in
+   * progress, and a dependency that changed while someone was recording would
+   * construct a second centre and drop the windows the first one had collected.
+   * The sign language is a *default* here and is kept in step by the effect
+   * below, so changing it re-points the same centre instead of replacing it.
+   *
+   * `newId` is the production factory. Tests construct their own `MlCentre` with
+   * a counter, which is why every id in `ml/` is injected rather than generated
+   * where it is needed.
+   */
+  const mlRef = useRef<MlCentre | null>(null);
+  if (mlRef.current === null) {
+    mlRef.current = new MlCentre({
+      storage: activeStorage,
+      newId: createIdFactory(),
+      now: () => Date.now(),
+      defaultLanguageId: profile.id,
+      sources: { left: controllers.left, right: controllers.right },
+      gloveInfo: (side) => {
+        const glove = controllers[side].getSnapshot();
+        /*
+         * `source !== 'none'` is the honest test for "there is something to
+         * record from": it is `none` before the first packet as well as when no
+         * glove is connected, so a session cannot be opened against a link that
+         * is up but silent.
+         */
+        return {
+          connected: glove.source !== 'none',
+          real: !glove.synthetic,
+          transportName: glove.transportName,
+          calibrationVersion: calibration[side].version,
+        };
+      },
+      /*
+       * This build has no picker, and the object it gets says so in a sentence
+       * rather than throwing from a screen. See `ml/media.ts`: adding a picker
+       * changes the native build and needs its own device test.
+       */
+      picker: new UnavailablePicker(),
+    });
+  }
+  const ml = mlRef.current;
+
   // Dispose on unmount so no simulator interval survives the provider.
   useEffect(() => {
     const active = controllers;
@@ -257,6 +347,8 @@ export function AppStateProvider({
     const captionsController = captions;
     const maintenanceController = maintenance;
     const pushController = push;
+    const announcementsReader = announcements;
+    const mlCentre = ml;
     return () => {
       active.left.dispose();
       active.right.dispose();
@@ -272,8 +364,36 @@ export function AppStateProvider({
       // Detaches the Firebase listeners. Leaving them attached across a hot
       // reload would deliver each message to every generation of the provider.
       pushController.dispose();
+      // Drops the notice subscribers and stops any read in flight from writing
+      // state into a provider that no longer exists.
+      announcementsReader.dispose();
+      // Detaches the frame taps. A listener left attached across a hot reload
+      // would feed every generation of the centre the same frames.
+      mlCentre.dispose();
     };
-  }, [controllers, poseStreams, speech, captions, maintenance, push]);
+  }, [controllers, poseStreams, speech, captions, maintenance, push, announcements, ml]);
+
+  /**
+   * Reads the stored dataset, attaches the frame taps, and loads the live model.
+   *
+   * The centre keeps working while its screen is closed — a window being
+   * recorded is not abandoned by navigating away — which is only true because
+   * this runs at the provider rather than at the screen.
+   */
+  useEffect(() => {
+    void ml.start();
+  }, [ml]);
+
+  /**
+   * Keeps the centre pointed at the sign language the app is set to.
+   *
+   * The preference is the app's single answer to that question; the centre
+   * having its own would let it file windows under a language the rest of the
+   * app is not showing.
+   */
+  useEffect(() => {
+    ml.setLanguage(profile.id);
+  }, [ml, profile.id]);
 
   /**
    * The maintenance check, and the re-check on resume.
@@ -285,15 +405,26 @@ export function AppStateProvider({
    */
   useEffect(() => {
     void maintenance.refresh();
+    /*
+     * Notices are read here too, on the same schedule and for the same reason: a
+     * notice published while the app was backgrounded should be there when the
+     * user comes back, not only after they find Settings and reload it. The two
+     * share one listener rather than each adding their own, so returning to the
+     * app makes one pass over the effects rather than two independent ones.
+     */
+    void announcements.refresh();
 
     const subscription = RNAppState.addEventListener('change', (next) => {
-      if (next === 'active') void maintenance.refresh();
+      if (next === 'active') {
+        void maintenance.refresh();
+        void announcements.refresh();
+      }
     });
 
     return () => {
       subscription.remove();
     };
-  }, [maintenance]);
+  }, [maintenance, announcements]);
 
   /**
    * Suspend frame production while backgrounded.
@@ -327,7 +458,9 @@ export function AppStateProvider({
       speech,
       captions,
       maintenance,
+      announcements,
       push,
+      ml,
       translator,
       recognitionAvailable: recogniser.isAvailable,
       recognitionUnavailableReason: recogniser.unavailableReason,
@@ -345,7 +478,9 @@ export function AppStateProvider({
       speech,
       captions,
       maintenance,
+      announcements,
       push,
+      ml,
       translator,
     ],
   );
@@ -435,6 +570,23 @@ export function useMaintenanceState(): MaintenanceState {
     maintenance.subscribe,
     maintenance.getSnapshot,
     maintenance.getSnapshot,
+  );
+}
+
+/**
+ * Live notice state.
+ *
+ * Same store shape again. A subscription rather than a value read once, because
+ * the answer arrives asynchronously — and because a failed read replaces notices
+ * the user was reading with a dated copy of the same list, which only a
+ * subscriber will see.
+ */
+export function useNoticesState(): AnnouncementsState {
+  const { announcements } = useAppState();
+  return useSyncExternalStore(
+    announcements.subscribe,
+    announcements.getSnapshot,
+    announcements.getSnapshot,
   );
 }
 

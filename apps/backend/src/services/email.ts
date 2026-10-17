@@ -46,7 +46,9 @@ export function initEmailService(smtpConfig: SmtpConfig): Transporter | null {
     port: smtpConfig.port,
     secure: smtpConfig.secure, // true for 465, false for 587
     auth: {
-      user: smtpConfig.user ?? 'sanketvaani.auth@gmail.com',
+      // Must match `smtp.user` in config.ts. The one-n spelling that used to be
+      // here named a mailbox that does not receive this project's mail.
+      user: smtpConfig.user ?? 'sanketvaanni.auth@gmail.com',
       pass: smtpConfig.pass.trim(),
     },
   });
@@ -142,7 +144,7 @@ export async function sendSecurityAlertEmail(
     `Details: ${details.description}\n` +
     `Time: ${timestamp}\n` +
     (details.userAgentOrDevice ? `Device / Source: ${details.userAgentOrDevice}\n\n` : '\n') +
-    `If you did not perform this action, please secure your account immediately or contact support at sanketvaani.auth@gmail.com.\n`;
+    `If you did not perform this action, please secure your account immediately or contact support at sanketvaanni@gmail.com.\n`;
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #ffffff;">
@@ -188,7 +190,7 @@ export async function sendWelcomeOnboardingEmail(
     `2. Pair your sensory glove via Bluetooth Low Energy in Dashboard.\n` +
     `3. Perform flex sensor calibration in the 3D Hand Gesture Viewer.\n` +
     `4. Customize your OLED Studio dual-hand presets in More settings.\n\n` +
-    `Support: sanketvaani.auth@gmail.com\n`;
+    `Support: sanketvaanni@gmail.com\n`;
 
   const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #ffffff;">
@@ -207,7 +209,7 @@ export async function sendWelcomeOnboardingEmail(
       </div>
       <p style="color: #64748b; font-size: 13px;">All core gesture recognition operates 100% offline-first on your device.</p>
       <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
-      <p style="color: #94a3b8; font-size: 11px; margin: 0;">Sanket Vaanni &bull; sanketvaani.auth@gmail.com</p>
+      <p style="color: #94a3b8; font-size: 11px; margin: 0;">Sanket Vaanni &bull; sanketvaanni@gmail.com</p>
     </div>
   `;
 

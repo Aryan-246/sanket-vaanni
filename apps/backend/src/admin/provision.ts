@@ -445,7 +445,15 @@ export function supabaseProvisionDeps(client: SupabaseClient): ProvisionDeps {
     },
 
     async promote(id: string): Promise<void> {
-      const { error } = await client.from('profiles').update({ role: 'admin' }).eq('id', id);
+      // `create` only runs when there is no active administrator, so this is the
+      // first one and also the permanent owner. Both columns change in one
+      // statement: two updates would leave a window in which an administrator
+      // exists and the owner guard protects nobody. `is_owner` is refused by a
+      // trigger for any writer that is not the service role.
+      const { error } = await client
+        .from('profiles')
+        .update({ role: 'admin', is_owner: true })
+        .eq('id', id);
       if (error) throw new Error(error.message);
     },
 

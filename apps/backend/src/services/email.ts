@@ -1,5 +1,5 @@
 /**
- * Reusable Nodemailer Email Service for Sanket Vaanni Backend.
+ * Reusable email service for Sanket Vaanni Backend.
  *
  * Dedicated strictly to application transactional, security, and export emails.
  *
@@ -7,13 +7,23 @@
  * Supabase Auth remains exclusively responsible for user authentication emails
  * (email confirmation, password recovery, magic links). This service does NOT
  * replace or duplicate those Supabase Auth workflows.
+ *
+ * ## Two transports, one switch
+ *
+ * SMTP is the original path and remains the default. Some hosts refuse
+ * outbound SMTP entirely — Render's free tier among them — and on those a
+ * correct SMTP credential still times out. For that case `EMAIL_PROVIDER=brevo`
+ * sends through Brevo's HTTPS API instead. The sender address is unchanged:
+ * both paths send as whatever `SMTP_FROM` says.
+ *
+ * The provider is chosen explicitly. The service never silently falls back
+ * from one transport to another: a silent fallback would make a delivery
+ * failure look like a delivery success on the other path.
  */
 
 import nodemailer, { type Transporter } from 'nodemailer';
-import type { SmtpConfig } from '../config.js';
 
-let transporterInstance: Transporter | null = null;
-let currentConfig: SmtpConfig | null = null;
+import type { EmailProvider, SmtpConfig } from '../config.js';
 
 export interface EmailDeliveryResult {
   accepted: boolean;
@@ -30,76 +40,216 @@ export interface SendEmailOptions {
   replyTo?: string;
 }
 
-/**
- * Initializes or updates the Nodemailer transporter.
- */
-export function initEmailService(smtpConfig: SmtpConfig): Transporter | null {
-  currentConfig = smtpConfig;
+export interface EmailServiceConfig {
+  readonly smtp: SmtpConfig;
+  readonly provider: EmailProvider;
+  readonly brevoApiKey?: string;
+  readonly brevoEndpoint: string;
+}
 
-  if (!smtpConfig.pass || smtpConfig.pass.trim().length === 0) {
-    transporterInstance = null;
+type TransportState =
+  | { readonly provider: 'smtp'; readonly transporter: Transporter }
+  | { readonly provider: 'brevo'; readonly apiKey: string; readonly endpoint: string };
+
+let transport: TransportState | null = null;
+let currentConfig: EmailServiceConfig | null = null;
+
+/**
+ * Initializes or replaces the delivery transport.
+ *
+ * Returns the Nodemailer transport when SMTP is in use (the historical return
+ * value), and `null` for the HTTP provider, which has no transporter object.
+ */
+export function initEmailService(config: EmailServiceConfig): Transporter | null {
+  currentConfig = config;
+
+  if (config.provider === 'brevo') {
+    const apiKey = config.brevoApiKey?.trim();
+    if (!apiKey) {
+      // Configured for Brevo but with no key: report unavailable rather than
+      // pretending the SMTP credentials in the same environment are in use.
+      transport = null;
+      return null;
+    }
+    transport = { provider: 'brevo', apiKey, endpoint: config.brevoEndpoint.replace(/\/+$/, '') };
     return null;
   }
 
-  transporterInstance = nodemailer.createTransport({
-    host: smtpConfig.host,
-    port: smtpConfig.port,
-    secure: smtpConfig.secure, // true for 465, false for 587
+  const smtp = config.smtp;
+  if (!smtp.pass || smtp.pass.trim().length === 0) {
+    transport = null;
+    return null;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure, // true for 465, false for 587
     auth: {
       // Must match `smtp.user` in config.ts. The one-n spelling that used to be
       // here named a mailbox that does not receive this project's mail.
-      user: smtpConfig.user ?? 'sanketvaanni.auth@gmail.com',
-      pass: smtpConfig.pass.trim(),
+      user: smtp.user ?? 'sanketvaanni.auth@gmail.com',
+      pass: smtp.pass.trim(),
     },
   });
 
-  return transporterInstance;
+  transport = { provider: 'smtp', transporter };
+  return transporter;
 }
 
-/**
- * Checks whether SMTP credentials (specifically the App Password) are configured.
- */
+/** The transport actually in use, for status reporting. */
+export function emailProviderInUse(): EmailProvider | null {
+  return transport?.provider ?? null;
+}
+
+/** Whether the configured transport has everything it needs to attempt a send. */
 export function isEmailConfigured(): boolean {
-  return transporterInstance !== null && Boolean(currentConfig?.pass);
+  return transport !== null;
 }
 
 /**
- * Verifies SMTP transport connectivity against the mail server.
+ * Verifies the transport can reach its provider.
+ *
+ * For SMTP this is the historical `transporter.verify()`. For Brevo it is a
+ * read-only account call: it proves the key is accepted without sending mail.
  */
-export async function verifySmtpConnection(): Promise<{ connected: boolean; error?: string }> {
-  if (!transporterInstance) {
+export async function verifyEmailConnection(): Promise<{ connected: boolean; error?: string }> {
+  if (!transport) {
     return {
       connected: false,
-      error: 'SMTP is not configured. Provide SMTP_PASS in backend environment.',
+      error: currentConfig?.provider === 'brevo'
+        ? 'Brevo is selected but BREVO_API_KEY is not set.'
+        : 'SMTP is not configured. Provide SMTP_PASS in backend environment.',
     };
   }
 
+  if (transport.provider === 'smtp') {
+    try {
+      await transport.transporter.verify();
+      return { connected: true };
+    } catch (err) {
+      return { connected: false, error: errorMessage(err) };
+    }
+  }
+
   try {
-    await transporterInstance.verify();
+    const response = await fetch(`${transport.endpoint}/account`, {
+      method: 'GET',
+      headers: { accept: 'application/json', 'api-key': transport.apiKey },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) {
+      return {
+        connected: false,
+        error: `Brevo rejected the API key (HTTP ${response.status}).`,
+      };
+    }
     return { connected: true };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    return { connected: false, error: errorMsg };
+    return { connected: false, error: errorMessage(err) };
+  }
+}
+
+/**
+ * Historical name for {@link verifyEmailConnection}.
+ *
+ * The admin health route and its tests inject this name. It now covers both
+ * transports, so the name is kept as an alias rather than silently changing
+ * the meaning of an exported symbol callers already depend on.
+ */
+export const verifySmtpConnection = verifyEmailConnection;
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Splits `Name <a@b>` into the parts the Brevo API expects. */
+export function parseSender(from: string): { email: string; name?: string } {
+  const match = from.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+  if (match) {
+    const name = (match[1] ?? '').trim();
+    const email = (match[2] ?? '').trim();
+    if (email) return { email, ...(name ? { name } : {}) };
+  }
+  return { email: from.trim() };
+}
+
+/** Sends one message through the Brevo HTTPS API. */
+async function sendViaBrevo(
+  state: Extract<TransportState, { provider: 'brevo' }>,
+  from: string,
+  options: SendEmailOptions,
+): Promise<EmailDeliveryResult> {
+  try {
+    const response = await fetch(`${state.endpoint}/smtp/email`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'api-key': state.apiKey,
+      },
+      body: JSON.stringify({
+        sender: parseSender(from),
+        to: [{ email: options.to }],
+        subject: options.subject,
+        htmlContent: options.html,
+        textContent: options.text,
+        ...(options.replyTo ? { replyTo: { email: options.replyTo } } : {}),
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      // Brevo's body carries a human-readable reason (for example an
+      // unverified sender). The API key is never part of that body.
+      return {
+        accepted: false,
+        error: `Brevo refused the message (HTTP ${response.status}): ${bodyText.slice(0, 300)}`,
+      };
+    }
+
+    let messageId: string | undefined;
+    try {
+      const parsed = JSON.parse(bodyText) as { messageId?: unknown };
+      if (typeof parsed.messageId === 'string') messageId = parsed.messageId;
+    } catch {
+      // A 2xx with a non-JSON body is still an acceptance; keep the raw text.
+    }
+
+    // Brevo returns 201 Created with a message id. A 2xx without one is
+    // reported as accepted but with the raw response, not invented metadata.
+    return { accepted: true, messageId, response: bodyText.slice(0, 300) };
+  } catch (err) {
+    return { accepted: false, error: errorMessage(err) };
   }
 }
 
 /**
  * Sends a generic transactional email.
- * Never logs the password or credentials.
+ * Never logs the password, API key or other credentials.
  */
 export async function sendTransactionalEmail(
   options: SendEmailOptions,
 ): Promise<EmailDeliveryResult> {
-  if (!transporterInstance || !currentConfig) {
+  if (!transport || !currentConfig) {
     return {
       accepted: false,
-      error: 'SMTP service is unconfigured. Set SMTP_PASS in backend .env to enable email delivery.',
+      error: currentConfig?.provider === 'brevo'
+        ? 'Email delivery is not configured. Set BREVO_API_KEY in the backend environment.'
+        : 'SMTP service is unconfigured. Set SMTP_PASS in backend .env to enable email delivery.',
     };
   }
 
+  const from = currentConfig.smtp.from;
+
+  if (transport.provider === 'brevo') {
+    return sendViaBrevo(transport, from, options);
+  }
+
   try {
-    const info = await transporterInstance.sendMail({
-      from: currentConfig.from,
+    const info = await transport.transporter.sendMail({
+      from,
       to: options.to,
       subject: options.subject,
       text: options.text,
@@ -115,11 +265,7 @@ export async function sendTransactionalEmail(
       response: typeof info.response === 'string' ? info.response : undefined,
     };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    return {
-      accepted: false,
-      error: errorMsg,
-    };
+    return { accepted: false, error: errorMessage(err) };
   }
 }
 

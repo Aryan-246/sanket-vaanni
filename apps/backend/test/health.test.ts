@@ -20,6 +20,8 @@ const testConfig: AppConfig = {
     secure: true,
     from: 'Sanket Vaanni <test@invalid>',
   },
+  emailProvider: 'smtp',
+  brevoEndpoint: 'https://api.brevo.com/v3',
 };
 
 describe('GET /health', () => {

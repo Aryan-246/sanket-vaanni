@@ -24,6 +24,11 @@
  *     cannot grant the role to anybody, only restore one already granted.
  *   * **No unlogged change.** Both halves of the action are written to
  *     `admin_audit_log`, under one request id, exactly as a route does.
+ *   * **One permanent owner.** The first administrator created here is also
+ *     marked as the permanent owner (`profiles.is_owner`). On a project that
+ *     already has administrators but no owner — an older deployment — the
+ *     operator can designate one explicitly with `--owner`. Only the service
+ *     role can write that column; the database refuses it for a client token.
  *
  * ## Why the two modes are not one
  *
@@ -53,7 +58,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /** What the script was asked to do. */
-export type BootstrapMode = 'promote' | 'restore';
+export type BootstrapMode = 'promote' | 'restore' | 'owner';
 
 /** The account as it exists, before anything is changed. */
 export interface ExistingAccount {
@@ -61,6 +66,7 @@ export interface ExistingAccount {
   readonly email: string | null;
   readonly role: string;
   readonly status: string;
+  readonly isOwner?: boolean;
 }
 
 export interface BootstrapAuditEntry {
@@ -81,8 +87,12 @@ export interface BootstrapAuditEntry {
 export interface BootstrapDeps {
   findByEmail(email: string): Promise<ExistingAccount | null>;
   countActiveAdmins(): Promise<number>;
+  /** Whether any profile already carries `is_owner`. */
+  hasOwner(): Promise<boolean>;
   promote(id: string): Promise<void>;
   restore(id: string): Promise<void>;
+  /** Marks an existing active administrator as the permanent owner. */
+  designateOwner(id: string): Promise<void>;
   writeAudit(entry: BootstrapAuditEntry): Promise<void>;
   newRequestId(): string;
 }
@@ -104,7 +114,7 @@ export type BootstrapResult =
   | {
       readonly ok: true;
       readonly changed: boolean;
-      readonly action: 'bootstrap_admin' | 'restore_admin' | 'none';
+      readonly action: 'bootstrap_admin' | 'restore_admin' | 'designate_owner' | 'none';
       readonly userId: string;
       readonly message: string;
       /** Set when the action happened but its outcome could not be recorded. */
@@ -118,6 +128,7 @@ const MIN_REASON_LENGTH = 3;
 const ACTION_FOR: Record<BootstrapMode, string> = {
   promote: 'bootstrap_admin',
   restore: 'restore_admin',
+  owner: 'designate_owner',
 };
 
 function normaliseEmail(raw: string): string {
@@ -159,7 +170,9 @@ export async function runBootstrap(
     };
   }
 
-  const decision = decide(request.mode, account, await deps.countActiveAdmins());
+  const decision = request.mode === 'owner'
+    ? await decideOwner(deps, account)
+    : decide(request.mode, account, await deps.countActiveAdmins());
 
   /*
    * A refusal writes nothing at all. It is not an attempted action that failed —
@@ -219,6 +232,7 @@ export async function runBootstrap(
 
   try {
     if (decision.action === 'bootstrap_admin') await deps.promote(account.id);
+    else if (decision.action === 'designate_owner') await deps.designateOwner(account.id);
     else await deps.restore(account.id);
   } catch (error) {
     const detail = (error as Error).message;
@@ -288,7 +302,7 @@ type Decision =
   | { readonly kind: 'none'; readonly message: string }
   | {
       readonly kind: 'change';
-      readonly action: 'bootstrap_admin' | 'restore_admin';
+      readonly action: 'bootstrap_admin' | 'restore_admin' | 'designate_owner';
       readonly message: string;
     };
 
@@ -377,6 +391,52 @@ function decide(mode: BootstrapMode, account: ExistingAccount, activeAdmins: num
   };
 }
 
+/**
+ * Whether this account may become the permanent owner.
+ *
+ * Separate from `decide` because it answers a different question and, crucially,
+ * because it does **not** touch the administrator count. An owner only exists on
+ * a project that already has an active administrator; refusing when one exists
+ * would make the mode unusable, and allowing it to promote would make `--owner`
+ * a second promotion path.
+ *
+ * The rule is therefore: the account must already be an active administrator,
+ * and there must not already be an owner.
+ */
+async function decideOwner(deps: BootstrapDeps, account: ExistingAccount): Promise<Decision> {
+  if (account.isOwner === true) {
+    return {
+      kind: 'none',
+      message: 'That account is already the permanent owner. Nothing to do.',
+    };
+  }
+
+  if (await deps.hasOwner()) {
+    return {
+      kind: 'refuse',
+      message:
+        'This project already has a permanent owner, and the database allows only one. ' +
+        'Demoting or replacing the owner is refused by design; it would require a migration, ' +
+        'not a flag.',
+    };
+  }
+
+  if (account.role !== 'admin' || account.status !== 'active') {
+    return {
+      kind: 'refuse',
+      message:
+        'Only an active administrator can become the permanent owner. Promote and reactivate ' +
+        'this account first (without --owner), then run this mode again.',
+    };
+  }
+
+  return {
+    kind: 'change',
+    action: 'designate_owner',
+    message: 'Marked the account as the permanent owner.',
+  };
+}
+
 /* ------------------------------------------------------------ the real deps */
 
 /** Wires the logic above to a service-role client. */
@@ -385,7 +445,7 @@ export function supabaseBootstrapDeps(client: SupabaseClient): BootstrapDeps {
     async findByEmail(email: string): Promise<ExistingAccount | null> {
       const { data, error } = await client
         .from('profiles')
-        .select('id, email, role, status')
+        .select('id, email, role, status, is_owner')
         .ilike('email', email)
         .maybeSingle();
 
@@ -397,7 +457,18 @@ export function supabaseBootstrapDeps(client: SupabaseClient): BootstrapDeps {
         email: typeof data.email === 'string' ? data.email : null,
         role: String(data.role ?? ''),
         status: String(data.status ?? ''),
+        isOwner: data.is_owner === true,
       };
+    },
+
+    async hasOwner(): Promise<boolean> {
+      const { count, error } = await client
+        .from('profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_owner', true);
+
+      if (error) throw new Error(`The owner could not be read: ${error.message}`);
+      return (count ?? 0) > 0;
     },
 
     async countActiveAdmins(): Promise<number> {
@@ -412,7 +483,20 @@ export function supabaseBootstrapDeps(client: SupabaseClient): BootstrapDeps {
     },
 
     async promote(id: string): Promise<void> {
-      const { error } = await client.from('profiles').update({ role: 'admin' }).eq('id', id);
+      // `bootstrap_admin` only runs when there is no active administrator, so
+      // this is necessarily the first one. It becomes the permanent owner in the
+      // same statement: two updates would leave a window in which the first
+      // administrator exists but the owner guard protects nobody. `is_owner`
+      // is writable only with the service role, which is what this client is.
+      const { error } = await client
+        .from('profiles')
+        .update({ role: 'admin', is_owner: true })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+
+    async designateOwner(id: string): Promise<void> {
+      const { error } = await client.from('profiles').update({ is_owner: true }).eq('id', id);
       if (error) throw new Error(error.message);
     },
 

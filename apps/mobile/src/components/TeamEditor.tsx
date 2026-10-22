@@ -44,7 +44,6 @@ import { pickTeamPhoto, removeTeamPhoto, uploadTeamPhoto } from '../admin/teamMe
 import { teamPhotoUrl } from '../about/teamContent';
 import { spacing } from '../theme';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
-import type { Palette } from '../theme/palette';
 
 interface Draft {
   readonly id: string | null;
@@ -575,7 +574,7 @@ export function TeamEditor(): React.JSX.Element {
   );
 }
 
-const makeStyles = (palette: Palette) =>
+const makeStyles = () =>
   StyleSheet.create({
     section: {
       gap: spacing.md,

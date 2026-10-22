@@ -8,7 +8,7 @@
  * and passes the active theme colours and state activity through postMessage.
  */
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 
 import type { OrbState } from './useOrbState';
@@ -40,7 +40,7 @@ function hexToRgbNormalized(hex: string): [number, number, number] {
 
 export function OrbShader({ state, size, testID }: OrbShaderProps): React.JSX.Element {
   const webViewRef = useRef<WebView>(null);
-  const { palette, accentColor } = useTheme();
+  const { palette } = useTheme();
   const reduceMotion = useReduceMotion();
 
   const [cr, cg, cb] = useMemo(() => hexToRgbNormalized(palette.accent), [palette.accent]);

@@ -4,7 +4,8 @@ import { createAuthHook } from '../middleware/auth.js';
 import {
   initEmailService,
   isEmailConfigured,
-  verifySmtpConnection,
+  emailProviderInUse,
+  verifyEmailConnection,
   sendTransactionalEmail,
   sendSecurityAlertEmail,
   sendWelcomeOnboardingEmail,
@@ -34,20 +35,27 @@ export function createEmailRoutes(config: AppConfig) {
   const requireAuth = createAuthHook(config);
 
   return async function emailRoutes(app: FastifyInstance): Promise<void> {
-    // Check SMTP service status and connectivity (never prints secrets)
+    // Check email service status and connectivity (never prints secrets)
     app.get('/email/status', async (_request: FastifyRequest, reply: FastifyReply) => {
       const configured = isEmailConfigured();
+      const provider = emailProviderInUse() ?? config.emailProvider;
       let connectionStatus: { connected: boolean; error?: string } = { connected: false };
 
       if (configured) {
-        connectionStatus = await verifySmtpConnection();
+        connectionStatus = await verifyEmailConnection();
       }
 
+      const smtpInUse = provider === 'smtp';
+
       return reply.status(200).send({
+        provider,
         configured,
-        host: config.smtp.host,
-        port: config.smtp.port,
-        secure: config.smtp.secure,
+        // These three describe the SMTP transport. For the HTTP provider they
+        // report the API endpoint it actually uses, rather than a Gmail server
+        // that is not involved.
+        host: smtpInUse ? config.smtp.host : new URL(config.brevoEndpoint).hostname,
+        port: smtpInUse ? config.smtp.port : 443,
+        secure: smtpInUse ? config.smtp.secure : true,
         sender: config.smtp.from,
         connected: connectionStatus.connected,
         error: connectionStatus.error ?? null,

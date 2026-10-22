@@ -6,6 +6,7 @@
  *   cd apps/backend
  *   npm run bootstrap:admin -- --email you@example.com --reason "Initial administrator"
  *   npm run bootstrap:admin -- --email you@example.com --reason "Locked out" --recovery
+ *   npm run bootstrap:admin -- --email you@example.com --reason "Designate owner" --owner
  *
  * The service-role key must be in the environment. `npm run` passes
  * `--env-file-if-exists=.env`, so a local `.env` works and nothing needs to be
@@ -38,9 +39,13 @@ Create or restore the first administrator.
   --email <address>   The account to act on. It must already exist.
   --reason "<text>"   Why. Stored in the audit log; at least 3 characters.
   --recovery          Restore a suspended administrator instead of promoting.
+  --owner             Mark an existing active administrator as the permanent owner.
+                      Records the designation in the audit log.
   --help              This text.
 
 The script refuses to promote anybody while an active administrator exists.
+Promotion of the first administrator also designates it as the permanent owner.
+--owner exists for projects that already have administrators but no owner.
 `;
 
 /** Parses argv, or returns the text explaining what was wrong with it. */
@@ -54,6 +59,10 @@ function parseArgs(argv: readonly string[]): Options | { readonly error: string 
     if (arg === '--help' || arg === '-h') return { error: USAGE };
     if (arg === '--recovery') {
       mode = 'restore';
+      continue;
+    }
+    if (arg === '--owner') {
+      mode = 'owner';
       continue;
     }
     if (arg === '--email' || arg === '--reason') {

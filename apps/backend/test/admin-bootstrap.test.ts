@@ -30,7 +30,12 @@ interface Harness {
 
 function harness(
   account: ExistingAccount | null,
-  options: { activeAdmins?: number; auditFails?: boolean; changeFails?: boolean } = {},
+  options: {
+    activeAdmins?: number;
+    auditFails?: boolean;
+    changeFails?: boolean;
+    ownerExists?: boolean;
+  } = {},
 ): Harness {
   const audit: BootstrapAuditEntry[] = [];
   const changes: string[] = [];
@@ -39,6 +44,7 @@ function harness(
   const deps: BootstrapDeps = {
     findByEmail: async () => account,
     countActiveAdmins: async () => options.activeAdmins ?? 0,
+    hasOwner: async () => options.ownerExists ?? false,
     promote: async (id: string) => {
       if (options.changeFails) throw new Error('connection reset');
       changes.push(`promote:${id}`);
@@ -46,6 +52,10 @@ function harness(
     restore: async (id: string) => {
       if (options.changeFails) throw new Error('connection reset');
       changes.push(`restore:${id}`);
+    },
+    designateOwner: async (id: string) => {
+      if (options.changeFails) throw new Error('connection reset');
+      changes.push(`owner:${id}`);
     },
     writeAudit: async (entry: BootstrapAuditEntry) => {
       // The request half failing must abort; the outcome half failing must not.
@@ -85,6 +95,10 @@ function promote(email = FIRST_EMAIL, reason = REASON) {
 
 function restore(email = FIRST_EMAIL, reason = REASON) {
   return { email, reason, mode: 'restore' as const };
+}
+
+function designate(email = FIRST_EMAIL, reason = REASON) {
+  return { email, reason, mode: 'owner' as const };
 }
 
 describe('when the project already has an administrator', () => {
@@ -293,8 +307,10 @@ describe('recording what happened', () => {
     const deps: BootstrapDeps = {
       findByEmail: async () => ORDINARY,
       countActiveAdmins: async () => 0,
+      hasOwner: async () => false,
       promote: async () => undefined,
       restore: async () => undefined,
+      designateOwner: async () => undefined,
       writeAudit: async (entry) => {
         if (entry.outcome === 'requested') {
           audit.push(entry);
@@ -351,8 +367,10 @@ describe('the first administrator', () => {
         return ORDINARY;
       },
       countActiveAdmins: async () => 0,
+      hasOwner: async () => false,
       promote: async () => undefined,
       restore: async () => undefined,
+      designateOwner: async () => undefined,
       writeAudit: async () => undefined,
       newRequestId: () => 'cli-test-1',
     };
@@ -364,3 +382,88 @@ describe('the first administrator', () => {
     expect(seen).toEqual(['first@example.test']);
   });
 });
+
+describe('designating the permanent owner', () => {
+  it('marks an existing active administrator when the project has no owner', async () => {
+    /*
+     * The path for a project that already has administrators but predates the
+     * owner column. It cannot promote — the account already holds the role — and
+     * the change is recorded like any other privilege change.
+     */
+    const { deps, changes, audit } = harness(ADMIN_ROW, { activeAdmins: 1 });
+
+    const result = await runBootstrap(deps, designate());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.action).toBe('designate_owner');
+    expect(result.changed).toBe(true);
+    expect(changes).toEqual(['owner:user-1']);
+    expect(audit.map((entry) => entry.action)).toEqual(['designate_owner', 'designate_owner']);
+    expect(audit.map((entry) => entry.outcome)).toEqual(['requested', 'succeeded']);
+  });
+
+  it('will not use ownership to grant the administrator role', async () => {
+    const { deps, changes, audit } = harness(ORDINARY, { activeAdmins: 0 });
+
+    const result = await runBootstrap(deps, designate());
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.message).toMatch(/Only an active administrator/);
+    expect(changes).toEqual([]);
+    expect(audit).toEqual([]);
+  });
+
+  it('refuses a suspended administrator', async () => {
+    const { deps, changes } = harness(SUSPENDED_ADMIN, { activeAdmins: 0 });
+
+    const result = await runBootstrap(deps, designate());
+
+    expect(result.ok).toBe(false);
+    expect(changes).toEqual([]);
+  });
+
+  it('refuses when an owner already exists, and writes nothing', async () => {
+    // One owner by database design; replacing one is a migration, not a flag.
+    const { deps, changes, audit } = harness(ADMIN_ROW, {
+      activeAdmins: 2,
+      ownerExists: true,
+    });
+
+    const result = await runBootstrap(deps, designate());
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.message).toMatch(/already has a permanent owner/);
+    expect(changes).toEqual([]);
+    expect(audit).toEqual([]);
+  });
+
+  it('is idempotent for the account that is already the owner', async () => {
+    const { deps, changes, audit } = harness(
+      { ...ADMIN_ROW, isOwner: true },
+      { activeAdmins: 1, ownerExists: true },
+    );
+
+    const result = await runBootstrap(deps, designate());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.changed).toBe(false);
+    expect(result.action).toBe('none');
+    expect(changes).toEqual([]);
+    // Recorded: the operator asked, and the answer is that it was already true.
+    expect(audit.map((entry) => entry.outcome)).toEqual(['requested', 'succeeded']);
+  });
+
+  it('does not change ownership when the attempt cannot be recorded', async () => {
+    const { deps, changes } = harness(ADMIN_ROW, { activeAdmins: 1, auditFails: true });
+
+    const result = await runBootstrap(deps, designate());
+
+    expect(result.ok).toBe(false);
+    expect(changes).toEqual([]);
+  });
+});
+

@@ -36,3 +36,12 @@ services:
         sync: false
       - key: SMTP_FROM
         value: Sanket Vaanni <sanketvaanni.auth@gmail.com>
+      # Render's free tier blocks outbound SMTP (25/465/587), so the SMTP path
+      # above cannot deliver from this host. Set EMAIL_PROVIDER=brevo and
+      # provide BREVO_API_KEY (sender stays sanketvaanni.auth@gmail.com) to use
+      # the HTTPS API instead. Left as smtp so behaviour stays explicit until
+      # the key exists.
+      - key: EMAIL_PROVIDER
+        value: smtp
+      - key: BREVO_API_KEY
+        sync: false

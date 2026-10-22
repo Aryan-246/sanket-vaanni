@@ -162,10 +162,21 @@ BEGIN
       ADD CONSTRAINT profiles_status_check CHECK (status IN ('active', 'suspended'));
   END IF;
 
-  -- An avatar is a path in a private bucket, not a public URL. Constraining it
-  -- to a relative path keeps a future mistake — storing a public link — from
-  -- being possible, which is the difference between a private photo and a
-  -- leaked one.
+  -- An avatar is the address of this account's own photo.
+  --
+  -- The mobile client uploads to `avatars/<user-id>/<file>` and stores the
+  -- public URL that Storage returns (`apps/mobile/src/account/avatar.ts:190`),
+  -- so a constraint that rejects every `http(s)://` value rejects every real
+  -- avatar and fails the save with 23514. The earlier form of this check did
+  -- exactly that.
+  --
+  -- The accepted shapes are now the two the application can actually produce:
+  --   * a bare object path, `<id>/<file>`, and
+  --   * the project's public URL, `.../storage/v1/object/public/avatars/<id>/<file>`.
+  -- Both are tied to the row's own id, so one account cannot point its profile
+  -- at another account's folder. NOT VALID: rows written before this rule are
+  -- left alone rather than blocking the migration; every new write is checked.
+  ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_avatar_path_check;
   IF NOT EXISTS (
     SELECT 1
     FROM pg_constraint c
@@ -177,7 +188,11 @@ BEGIN
   ) THEN
     ALTER TABLE public.profiles
       ADD CONSTRAINT profiles_avatar_path_check
-      CHECK (avatar_url IS NULL OR avatar_url !~* '^https?://');
+      CHECK (
+        avatar_url IS NULL
+        OR avatar_url LIKE id::text || '/%'
+        OR avatar_url LIKE '%/storage/v1/object/public/avatars/' || id::text || '/%'
+      ) NOT VALID;
   END IF;
 END
 $profile_constraints$;
@@ -405,8 +420,13 @@ CREATE POLICY "Administrators can read the audit log"
 -- [HARDENED] `anon` loses everything rather than just the write verbs. There is
 -- no policy on this table that serves a signed-out caller, so there is no
 -- reason for the role to hold any privilege on it.
-REVOKE ALL ON public.admin_audit_log FROM anon;
-REVOKE UPDATE, DELETE, TRUNCATE ON public.admin_audit_log FROM authenticated;
+--
+-- [HARDENED 2026-10-18] `authenticated` is reset the same way. Revoking only
+-- UPDATE/DELETE/TRUNCATE left an INSERT granted by Supabase's default
+-- privileges in place. RLS still has no INSERT policy, so it could not be
+-- exercised — but the grant described a capability the design does not have,
+-- and would become a real write path the day a policy was added by mistake.
+REVOKE ALL ON public.admin_audit_log FROM anon, authenticated;
 GRANT SELECT ON public.admin_audit_log TO authenticated;
 GRANT INSERT ON public.admin_audit_log TO service_role;
 GRANT SELECT ON public.admin_audit_log TO service_role;

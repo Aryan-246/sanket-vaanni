@@ -62,6 +62,68 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 1b. Privileged columns introduced by this file
+-- ---------------------------------------------------------------------------
+--
+-- `enforce_profile_privilege_boundary` (migration 20261014000000) was written
+-- before `is_owner` existed, so it guards role and status but not ownership.
+-- That left a real hole: an active administrator could call PostgREST's
+-- own-row UPDATE policy and set `is_owner = true` on themselves, which the
+-- unique partial index would then make permanent — and the owner guard below
+-- refuses to clear `is_owner` even for the service role. The owner would have
+-- had to be fixed with DDL.
+--
+-- This replacement keeps the original rules and adds ownership and email to
+-- the set of columns a client token may not change. `is_owner` is set only by
+-- the service role (the bootstrap/provision scripts); `email` is the Auth
+-- identity's address, not a profile preference.
+--
+-- Same NULL discipline as the original: `trusted` is COALESCEd and tested with
+-- `IS NOT TRUE`, so an absent JWT claim denies rather than silently permits.
+
+CREATE OR REPLACE FUNCTION public.enforce_profile_privilege_boundary()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+DECLARE
+  acting_role TEXT := COALESCE(current_setting('request.jwt.claim.role', true), '');
+  trusted BOOLEAN;
+BEGIN
+  trusted := (acting_role = 'service_role')
+             OR (current_user IN ('postgres', 'supabase_admin', 'service_role'));
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.role IS DISTINCT FROM 'user'
+       OR NEW.status IS DISTINCT FROM 'active'
+       OR NEW.is_owner IS TRUE THEN
+      IF trusted IS NOT TRUE THEN
+        RAISE EXCEPTION
+          'A new profile cannot be created with a privileged role, status or ownership.'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW.role IS NOT DISTINCT FROM OLD.role
+     AND NEW.status IS NOT DISTINCT FROM OLD.status
+     AND NEW.is_owner IS NOT DISTINCT FROM OLD.is_owner
+     AND NEW.email IS NOT DISTINCT FROM OLD.email THEN
+    RETURN NEW;
+  END IF;
+
+  IF trusted IS NOT TRUE THEN
+    RAISE EXCEPTION
+      'Changing role, status, ownership or email requires the service role. Client tokens cannot promote, suspend, own or re-address an account.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 2. Owner and last-administrator guard
 -- ---------------------------------------------------------------------------
 --
@@ -90,6 +152,17 @@ AS $$
 DECLARE
   remaining_active_admins INTEGER;
 BEGIN
+  -- Serialise every owner/admin demotion and deletion.
+  --
+  -- Counting "how many active admins remain" and then acting on the row is a
+  -- read-then-write. With exactly two active admins, two concurrent demotions
+  -- could each see one remaining and both succeed, leaving none. A transaction-
+  -- scoped advisory lock makes the count and the write one decision. It is
+  -- released automatically at commit or rollback.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('public.profiles.guard_owner_and_last_admin', 0)
+  );
+
   IF TG_OP = 'DELETE' THEN
     IF OLD.is_owner THEN
       RAISE EXCEPTION

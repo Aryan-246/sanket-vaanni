@@ -194,7 +194,6 @@ export function AdminScreen({
 }): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
-  const { user } = useAccount();
 
   const [section, setSection] = useState<AdminSection>('overview');
 

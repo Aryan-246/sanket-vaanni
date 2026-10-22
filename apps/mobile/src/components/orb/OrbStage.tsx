@@ -14,7 +14,6 @@ import { useStyles, useTheme } from '../../theme/ThemeProvider';
 import {
   ACCENT_COLOR_IDS,
   ACCENT_PALETTES,
-  type AccentColorId,
   type Palette,
 } from '../../theme/palette';
 import { radii, spacing } from '../../theme';

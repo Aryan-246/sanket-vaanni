@@ -75,16 +75,19 @@ ALTER TABLE public.oled_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_history ENABLE ROW LEVEL SECURITY;
 
 -- Profiles policies
+DROP POLICY IF EXISTS "Users can read own profile" ON public.profiles;
 CREATE POLICY "Users can read own profile"
   ON public.profiles FOR SELECT
   TO authenticated
   USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
 CREATE POLICY "Users can insert own profile"
   ON public.profiles FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile"
   ON public.profiles FOR UPDATE
   TO authenticated
@@ -92,16 +95,19 @@ CREATE POLICY "Users can update own profile"
   WITH CHECK (auth.uid() = id);
 
 -- User Preferences policies
+DROP POLICY IF EXISTS "Users can read own preferences" ON public.user_preferences;
 CREATE POLICY "Users can read own preferences"
   ON public.user_preferences FOR SELECT
   TO authenticated
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert own preferences" ON public.user_preferences;
 CREATE POLICY "Users can insert own preferences"
   ON public.user_preferences FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update own preferences" ON public.user_preferences;
 CREATE POLICY "Users can update own preferences"
   ON public.user_preferences FOR UPDATE
   TO authenticated
@@ -109,16 +115,19 @@ CREATE POLICY "Users can update own preferences"
   WITH CHECK (auth.uid() = user_id);
 
 -- Calibration Profiles policies
+DROP POLICY IF EXISTS "Users can read own calibration" ON public.calibration_profiles;
 CREATE POLICY "Users can read own calibration"
   ON public.calibration_profiles FOR SELECT
   TO authenticated
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert own calibration" ON public.calibration_profiles;
 CREATE POLICY "Users can insert own calibration"
   ON public.calibration_profiles FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update own calibration" ON public.calibration_profiles;
 CREATE POLICY "Users can update own calibration"
   ON public.calibration_profiles FOR UPDATE
   TO authenticated
@@ -126,16 +135,19 @@ CREATE POLICY "Users can update own calibration"
   WITH CHECK (auth.uid() = user_id);
 
 -- OLED Profiles policies
+DROP POLICY IF EXISTS "Users can read own oled profiles" ON public.oled_profiles;
 CREATE POLICY "Users can read own oled profiles"
   ON public.oled_profiles FOR SELECT
   TO authenticated
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert own oled profiles" ON public.oled_profiles;
 CREATE POLICY "Users can insert own oled profiles"
   ON public.oled_profiles FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update own oled profiles" ON public.oled_profiles;
 CREATE POLICY "Users can update own oled profiles"
   ON public.oled_profiles FOR UPDATE
   TO authenticated
@@ -143,16 +155,19 @@ CREATE POLICY "Users can update own oled profiles"
   WITH CHECK (auth.uid() = user_id);
 
 -- User History policies
+DROP POLICY IF EXISTS "Users can read own history" ON public.user_history;
 CREATE POLICY "Users can read own history"
   ON public.user_history FOR SELECT
   TO authenticated
   USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert own history" ON public.user_history;
 CREATE POLICY "Users can insert own history"
   ON public.user_history FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update own history" ON public.user_history;
 CREATE POLICY "Users can update own history"
   ON public.user_history FOR UPDATE
   TO authenticated

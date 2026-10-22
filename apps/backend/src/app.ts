@@ -56,12 +56,23 @@ export function buildApp(
       app.log.warn({ reason: fbStatus.error }, 'Firebase Admin SDK running in unconfigured mode');
     }
 
-    // Safe initialization of Nodemailer SMTP service
-    initEmailService(config.smtp);
+    // Safe initialization of the configured email transport
+    initEmailService({
+      smtp: config.smtp,
+      provider: config.emailProvider,
+      brevoApiKey: config.brevoApiKey,
+      brevoEndpoint: config.brevoEndpoint,
+    });
     if (isEmailConfigured()) {
-      app.log.info({ sender: config.smtp.from }, 'Nodemailer Gmail SMTP service initialized');
+      app.log.info(
+        { provider: config.emailProvider, sender: config.smtp.from },
+        'Email delivery service initialized',
+      );
     } else {
-      app.log.warn('Nodemailer SMTP running in unconfigured mode (SMTP_PASS not provided)');
+      app.log.warn(
+        { provider: config.emailProvider },
+        'Email delivery running in unconfigured mode',
+      );
     }
   }
 

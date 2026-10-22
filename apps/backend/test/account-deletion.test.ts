@@ -178,6 +178,8 @@ const CONFIG: AppConfig = {
   port: 0,
   logLevel: 'silent',
   smtp: { host: 'smtp.invalid', port: 465, secure: true, from: 'Sanket Vaanni <auth@example.com>' },
+  emailProvider: 'smtp',
+  brevoEndpoint: 'https://api.brevo.com/v3',
 };
 
 const PEPPER = 'test-pepper';

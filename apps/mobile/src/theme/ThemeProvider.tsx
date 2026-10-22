@@ -19,7 +19,6 @@ import React, {
 import { useColorScheme, type ViewStyle } from 'react-native';
 
 import {
-  PALETTES,
   resolvePalette,
   type AccentColorId,
   type ColorScheme,

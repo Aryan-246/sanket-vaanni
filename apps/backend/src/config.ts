@@ -27,6 +27,18 @@
 
 export type NodeEnv = 'development' | 'test' | 'production';
 
+/**
+ * How application email leaves the service.
+ *
+ * `smtp` is the original Nodemailer path. `brevo` is an HTTP-API path because
+ * some hosts — Render's free tier among them — refuse outbound SMTP ports
+ * entirely, so a working SMTP credential cannot deliver from there no matter
+ * how it is configured. The provider is explicit rather than "whichever
+ * credential happens to be present": a silent switch of delivery path is the
+ * kind of thing that turns one broken mailbox into a mystery.
+ */
+export type EmailProvider = 'smtp' | 'brevo';
+
 export interface SmtpConfig {
   readonly host: string;
   readonly port: number;
@@ -43,6 +55,18 @@ export interface AppConfig {
   readonly logLevel: string;
   readonly googleApplicationCredentials?: string;
   readonly smtp: SmtpConfig;
+  /**
+   * Application-email transport. Defaults to `smtp` so an existing deployment
+   * keeps the behaviour it was configured for.
+   */
+  readonly emailProvider: EmailProvider;
+  /**
+   * Brevo HTTP API key. Used only when `emailProvider` is `brevo`; absent means
+   * that provider is unavailable and the service reports it as unconfigured.
+   */
+  readonly brevoApiKey?: string;
+  /** Base URL of the Brevo API. Overridable so tests can use a local server. */
+  readonly brevoEndpoint: string;
   readonly apiInternalSecret?: string;
 
   /**
@@ -94,6 +118,18 @@ function parseNodeEnv(raw: string | undefined): NodeEnv {
   }
   throw new ConfigError(
     `NODE_ENV must be one of: ${NODE_ENVS.join(', ')} — received "${value}"`,
+  );
+}
+
+const EMAIL_PROVIDERS: readonly EmailProvider[] = ['smtp', 'brevo'];
+
+function parseEmailProvider(raw: string | undefined): EmailProvider {
+  const value = (raw ?? 'smtp').trim().toLowerCase();
+  if ((EMAIL_PROVIDERS as readonly string[]).includes(value)) {
+    return value as EmailProvider;
+  }
+  throw new ConfigError(
+    `EMAIL_PROVIDER must be one of: ${EMAIL_PROVIDERS.join(', ')} — received "${value}"`,
   );
 }
 
@@ -151,6 +187,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       from: parseNonEmpty(env.SMTP_FROM, 'Sanket Vaanni <sanketvaanni.auth@gmail.com>'),
     },
     apiInternalSecret: parseOptionalString(env.API_INTERNAL_SECRET),
+    emailProvider: parseEmailProvider(env.EMAIL_PROVIDER),
+    brevoApiKey: parseOptionalString(env.BREVO_API_KEY),
+    brevoEndpoint: parseNonEmpty(env.BREVO_ENDPOINT, 'https://api.brevo.com/v3'),
     supabaseUrl: parseOptionalString(env.SUPABASE_URL),
     supabaseAnonKey: parseOptionalString(env.SUPABASE_ANON_KEY),
     supabaseServiceRoleKey: parseOptionalString(env.SUPABASE_SERVICE_ROLE_KEY),

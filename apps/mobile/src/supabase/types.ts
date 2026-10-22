@@ -23,6 +23,12 @@ export interface Database {
           avatar_url: string | null;
           role: 'user' | 'admin';
           status: 'active' | 'suspended';
+          /**
+           * The single permanent owner. Protected by a database trigger: the row
+           * cannot be demoted, suspended, deleted or unmarked, even by the
+           * service role. Only the bootstrap/provision scripts set it.
+           */
+          is_owner: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -30,7 +36,12 @@ export interface Database {
           id: string;
           email?: string | null;
           display_name?: string | null;
-          /** A path in the private bucket. The database rejects a full URL. */
+          /**
+           * Either a path inside the owner's folder in the public `avatars`
+           * bucket (`<uid>/avatar-1.jpg`) or the public URL that
+           * `getPublicUrl` returns for it. The database rejects any path that
+           * is not in the calling user's own folder.
+           */
           avatar_url?: string | null;
           /**
            * Not writable by a client. A trigger refuses any value other than
@@ -39,6 +50,8 @@ export interface Database {
            */
           role?: 'user' | 'admin';
           status?: 'active' | 'suspended';
+          /** Refused for client tokens, like `role`. */
+          is_owner?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -50,6 +63,8 @@ export interface Database {
           /** Refused for client tokens; see the note above. */
           role?: 'user' | 'admin';
           status?: 'active' | 'suspended';
+          /** Refused for client tokens; see the Row note. */
+          is_owner?: boolean;
           created_at?: string;
           updated_at?: string;
         };

@@ -149,6 +149,8 @@ const TEST_CONFIG: AppConfig = {
   // A complete and useless SMTP block: `AppConfig` requires it, and `buildApp`
   // skips mail initialisation under `nodeEnv: 'test'`. Nothing here connects.
   smtp: { host: 'smtp.invalid', port: 465, secure: true, from: 'test@invalid' },
+  emailProvider: 'smtp',
+  brevoEndpoint: 'https://api.brevo.com/v3',
 };
 
 const ADMIN = { id: 'admin-1', email: 'admin@example.test' };

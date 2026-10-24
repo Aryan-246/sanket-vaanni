@@ -238,6 +238,13 @@ export class GloveController {
     }
   }
 
+  async sendOledCommand(command: Record<string, unknown>): Promise<void> {
+    if (this.#disposed) return;
+    if (typeof this.#transport.sendOledCommand === 'function') {
+      await this.#transport.sendOledCommand(command);
+    }
+  }
+
   /**
    * Suspends or resumes frame production without dropping the link.
    *

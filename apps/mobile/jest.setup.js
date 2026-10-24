@@ -124,3 +124,27 @@ jest.mock('@react-native-firebase/messaging', () => ({
   onNotificationOpenedApp: jest.fn(() => () => undefined),
   getInitialNotification: jest.fn(async () => null),
 }));
+
+// react-native-ble-plx native module mock for Jest environment
+jest.mock('react-native-ble-plx', () => {
+  return {
+    __esModule: true,
+    BleManager: jest.fn().mockImplementation(() => ({
+      state: jest.fn().mockResolvedValue('PoweredOn'),
+      onStateChange: jest.fn(),
+      startDeviceScan: jest.fn(),
+      stopDeviceScan: jest.fn(),
+      connectToDevice: jest.fn(),
+      destroy: jest.fn(),
+    })),
+    State: {
+      Unknown: 'Unknown',
+      Resetting: 'Resetting',
+      Unsupported: 'Unsupported',
+      Unauthorized: 'Unauthorized',
+      PoweredOff: 'PoweredOff',
+      PoweredOn: 'PoweredOn',
+    },
+  };
+});
+

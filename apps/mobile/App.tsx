@@ -4,11 +4,12 @@
  * @format
  */
 
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useMemo } from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { App } from './src/app/RootNavigator';
+import { createHardwareBleTransport } from './src/ble/bleTransport';
 
 /**
  * Background for the frame before React has mounted anything.
@@ -26,10 +27,20 @@ import { App } from './src/app/RootNavigator';
 const PRE_MOUNT_BACKGROUND = '#050506';
 
 export default function Main(): React.JSX.Element {
+  const transports = useMemo(() => {
+    if (Platform.OS === 'android') {
+      return {
+        transport: createHardwareBleTransport('right'),
+        leftTransport: createHardwareBleTransport('left'),
+      };
+    }
+    return {};
+  }, []);
+
   return (
     <SafeAreaProvider>
       <View style={styles.root}>
-        <App />
+        <App {...transports} />
       </View>
     </SafeAreaProvider>
   );

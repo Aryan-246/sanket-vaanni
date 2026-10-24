@@ -17,7 +17,7 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { Sheet } from '../components/Sheet';
 import { TextField } from '../components/TextField';
 import { Toggle } from '../components/Toggle';
-import { useAppState, useGlove, useLiveTranslation } from '../app/AppState';
+import { useAppState, useGlove, useGloveActions, useLiveTranslation } from '../app/AppState';
 import { formatDuration } from '../app/format';
 import {
   ANIMATION_SPEEDS,
@@ -218,6 +218,50 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
   const { layout, intro } = hand;
 
   const glove = useGlove(side);
+  const actions = useGloveActions(side);
+  const isHardwareConnected = glove.link.kind === 'connected' && !glove.synthetic;
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleApplyToGlove = useCallback(async () => {
+    if (!isHardwareConnected || !actions.sendOledCommand) return;
+    try {
+      setIsSyncing(true);
+      setSyncStatus('Applying layout to glove hardware...');
+      const titleItem = layout.items.find((i) => i.kind === 'title' && i.visible);
+      const batteryItem = layout.items.find((i) => i.kind === 'battery' && i.visible);
+      const cmd: Record<string, unknown> = {
+        set_layout: 1,
+        titleX: titleItem ? 0 : 0,
+        titleY: 0,
+        batteryX: batteryItem ? 80 : 80,
+        batteryY: 0,
+        tempX: 80,
+        tempY: 16,
+      };
+      await actions.sendOledCommand(cmd);
+      setSyncStatus('✓ Layout saved to glove NVS.');
+    } catch (err) {
+      setSyncStatus(`Sync error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [actions, isHardwareConnected, layout.items]);
+
+  const handleRestoreDefault = useCallback(async () => {
+    if (!isHardwareConnected || !actions.sendOledCommand) return;
+    try {
+      setIsSyncing(true);
+      setSyncStatus('Restoring factory default layout on glove...');
+      await actions.sendOledCommand({ restore_default: 1 });
+      setSyncStatus('✓ Factory default layout restored.');
+    } catch (err) {
+      setSyncStatus(`Sync error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [actions, isHardwareConnected]);
+
   // The shared outcome — there is no per-glove recogniser any more. `oledValuesFrom`
   // drops a result that this hand did not produce, so the panel still only ever
   // shows its own glove's sign.
@@ -426,6 +470,52 @@ export function OledScreen({ now = Date.now }: OledScreenProps): React.JSX.Eleme
         onChange={setSide}
         accessibilityLabel="Which glove's panel to edit"
       />
+
+      {/* Hardware sync card */}
+      <Card style={styles.card}>
+        <View style={styles.cardHead}>
+          <View style={styles.cardHeadText}>
+            <AppText variant="label">
+              {isHardwareConnected
+                ? `Hardware Linked: ${handName} (${glove.link.deviceName ?? 'SanketVaanni'})`
+                : `${handName} Glove Disconnected`}
+            </AppText>
+            <AppText variant="caption" color={palette.textMuted}>
+              {isHardwareConnected
+                ? 'Send customized coordinates or restore locked factory defaults on physical SSD1306.'
+                : 'Connect this glove in the Dashboard tab to send commands to physical OLED.'}
+            </AppText>
+          </View>
+          <Badge
+            label={isHardwareConnected ? 'Hardware Linked' : 'Offline'}
+            tone={isHardwareConnected ? 'success' : 'neutral'}
+          />
+        </View>
+
+        {syncStatus && (
+          <AppText variant="caption" color={palette.accent}>
+            {syncStatus}
+          </AppText>
+        )}
+
+        {isHardwareConnected && (
+          <View style={styles.dirtyActions}>
+            <ActionButton
+              label="Restore Default"
+              tone="ghost"
+              disabled={isSyncing}
+              onPress={handleRestoreDefault}
+              accessibilityLabel="Restore default OLED layout on hardware"
+            />
+            <ActionButton
+              label="Apply to Glove"
+              busy={isSyncing}
+              onPress={handleApplyToGlove}
+              accessibilityLabel="Apply layout to glove OLED"
+            />
+          </View>
+        )}
+      </Card>
 
       <Card style={styles.card}>
         <View style={styles.stateRow}>

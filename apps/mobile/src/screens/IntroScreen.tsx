@@ -447,7 +447,7 @@ export function IntroScreen({ onComplete }: IntroScreenProps): React.JSX.Element
   );
 
   return (
-    <View style={styles.root}>
+    <Pressable style={styles.root} onPress={finish}>
       {/*
         Hidden for the length of the cinematic, restored the moment this screen
         unmounts. `StatusBar` is a stack: this entry is pushed over the one in
@@ -519,7 +519,7 @@ export function IntroScreen({ onComplete }: IntroScreenProps): React.JSX.Element
           </Pressable>
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 

@@ -134,6 +134,24 @@ export function DiagnosticsCard({
 
           <View style={styles.metricRow}>
             <AppText variant="caption" color={palette.textMuted} style={styles.metricLabel}>
+              Battery (Cell / Pin)
+            </AppText>
+            <AppText variant="caption" color={palette.textSecondary} style={styles.metricValue}>
+              L: {gloves.left.calibrated?.battery_v !== undefined ? `${gloves.left.calibrated.battery_v.toFixed(2)}V (~${gloves.left.calibrated.battery_pct}%) [pin ${gloves.left.calibrated.battery_pin_v?.toFixed(3)}V]` : '--'} · R: {gloves.right.calibrated?.battery_v !== undefined ? `${gloves.right.calibrated.battery_v.toFixed(2)}V (~${gloves.right.calibrated.battery_pct}%) [pin ${gloves.right.calibrated.battery_pin_v?.toFixed(3)}V]` : '--'}
+            </AppText>
+          </View>
+
+          <View style={styles.metricRow}>
+            <AppText variant="caption" color={palette.textMuted} style={styles.metricLabel}>
+              IMU Temp (Silicon)
+            </AppText>
+            <AppText variant="caption" color={palette.textSecondary} style={styles.metricValue}>
+              L: {gloves.left.calibrated?.imu_temp_c !== undefined ? `${gloves.left.calibrated.imu_temp_c.toFixed(1)}°C (MPU6050)` : '--'} · R: {gloves.right.calibrated?.imu_temp_c !== undefined ? `${gloves.right.calibrated.imu_temp_c.toFixed(1)}°C (MPU6050)` : '--'}
+            </AppText>
+          </View>
+
+          <View style={styles.metricRow}>
+            <AppText variant="caption" color={palette.textMuted} style={styles.metricLabel}>
               Recognition
             </AppText>
             <AppText variant="caption" color={palette.textSecondary} style={styles.metricValue}>

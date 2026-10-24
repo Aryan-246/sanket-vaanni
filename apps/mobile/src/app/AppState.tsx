@@ -595,6 +595,7 @@ export interface GloveActions {
   connect: (deviceId: string) => Promise<void>;
   disconnect: () => Promise<void>;
   retry: () => Promise<void>;
+  sendOledCommand?: (command: Record<string, unknown>) => Promise<void>;
 }
 /** The imperative actions for one glove. Stable across renders. */
 export function useGloveActions(side: GloveSide): GloveActions {
@@ -614,6 +615,9 @@ export function useGloveActions(side: GloveSide): GloveActions {
       },
       retry: async () => {
         await controller.retry();
+      },
+      sendOledCommand: async (command: Record<string, unknown>) => {
+        await controller.sendOledCommand(command);
       },
     }),
     [controller],

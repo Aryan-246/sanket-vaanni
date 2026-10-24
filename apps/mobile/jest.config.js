@@ -28,7 +28,7 @@ module.exports = {
    * runs. The rest of the pattern is the preset's own list, kept intact.
    */
   transformIgnorePatterns: [
-    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|react-native-image-picker)/)',
+    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|react-native-image-picker|react-native-ble-plx)/)',
   ],
   collectCoverageFrom: [
     'src/**/*.{ts,tsx}',

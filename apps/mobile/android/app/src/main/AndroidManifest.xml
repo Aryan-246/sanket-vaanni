@@ -1,6 +1,32 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Bluetooth permissions for glove BLE connectivity.
+
+      Android < 12 (API < 31):
+        BLUETOOTH + BLUETOOTH_ADMIN cover scan and connect.
+        ACCESS_FINE_LOCATION is required by the platform for BLE scan results.
+
+      Android 12+ (API 31+):
+        BLUETOOTH_SCAN + BLUETOOTH_CONNECT replace the legacy permissions.
+        BLUETOOTH_SCAN has neverForLocation="true" because we do not use BLE
+        for location inference — we scan specifically for named glove devices.
+        ACCESS_FINE_LOCATION is still declared for devices running API <31.
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
+        tools:targetApi="s" />
 
     <!--
       Microphone access, for live captions only.

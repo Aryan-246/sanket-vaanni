@@ -125,5 +125,11 @@ export function applyCalibration(
     // Values pass through unchanged rather than being silently "corrected".
     accel: raw.accel,
     gyro: raw.gyro,
+    battery_v: raw.battery_v,
+    battery_pin_v: raw.battery_pin_v,
+    battery_pct: raw.battery_pct,
+    imu_temp_c: raw.imu_temp_c,
+    pitch: raw.pitch,
+    roll: raw.roll,
   };
 }

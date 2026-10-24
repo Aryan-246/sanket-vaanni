@@ -44,6 +44,18 @@ export interface RawSample {
   accel: Vec3;
   /** Angular rate in rad/s, glove frame. */
   gyro: Vec3;
+  /** Estimated battery voltage in V (from voltage divider on BATTERY_PIN). */
+  battery_v?: number;
+  /** Raw ADC pin voltage in V. */
+  battery_pin_v?: number;
+  /** Estimated battery percentage 0-100% (-1 if uncalibrated/unstable). */
+  battery_pct?: number;
+  /** MPU6050 internal junction temperature in °C (IMU temperature, not body temp). */
+  imu_temp_c?: number;
+  /** Pitch angle in degrees. */
+  pitch?: number;
+  /** Roll angle in degrees. */
+  roll?: number;
 }
 
 /** A reading with calibration applied and flex normalised to 0..1. */
@@ -54,4 +66,17 @@ export interface SensorSample {
   flex: FlexReading;
   accel: Vec3;
   gyro: Vec3;
+  /** Estimated battery voltage in V. */
+  battery_v?: number;
+  /** Raw ADC pin voltage in V. */
+  battery_pin_v?: number;
+  /** Estimated battery percentage 0-100%. */
+  battery_pct?: number;
+  /** MPU6050 internal junction temperature in °C. */
+  imu_temp_c?: number;
+  /** Pitch angle in degrees. */
+  pitch?: number;
+  /** Roll angle in degrees. */
+  roll?: number;
 }
+

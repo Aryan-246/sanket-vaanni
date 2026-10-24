@@ -101,4 +101,7 @@ export interface GloveTransport {
 
   /** Subscribe to sensor samples. Fires only while connected. */
   subscribe(listener: (sample: SensorSample) => void): Unsubscribe;
+
+  /** Send a display/control command to the hardware glove. */
+  sendOledCommand?(command: Record<string, unknown>): Promise<void>;
 }

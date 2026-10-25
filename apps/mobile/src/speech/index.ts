@@ -45,6 +45,7 @@ export interface Speaker {
    * the platform does, because the answer arrives after the first render.
    */
   subscribe?(listener: () => void): () => void;
+  probe?(forceReinit?: boolean): Promise<boolean>;
 }
 
 const NOT_IMPLEMENTED =
@@ -60,6 +61,10 @@ const NOT_IMPLEMENTED =
 export class UnavailableSpeaker implements Speaker {
   readonly isAvailable = false;
   readonly unavailableReason = NOT_IMPLEMENTED;
+
+  async probe(): Promise<boolean> {
+    return false;
+  }
 
   async speak(text: string): Promise<void> {
     throw new Error(`${NOT_IMPLEMENTED} Attempted to speak: "${text}"`);

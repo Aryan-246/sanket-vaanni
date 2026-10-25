@@ -1,6 +1,8 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { CalibrationModal } from '../components/CalibrationModal';
+import { OrientationCalibrationModal } from '../components/OrientationCalibrationModal';
 import { ActionButton } from '../components/ActionButton';
 import { AppText } from '../components/AppText';
 import { BrandHeader } from '../components/BrandHeader';
@@ -46,10 +48,12 @@ export interface DashboardScreenProps {
   onOpenAccount?: () => void;
   /** Opens the Textboard tab. */
   onOpenTextboard?: () => void;
+  /** Opens the ML learning centre directly. */
+  onOpenMl?: () => void;
 }
 
 /** Which explanation, if any, is open over the Dashboard. */
-type OpenSheet = 'text' | 'viewer' | 'device' | null;
+type OpenSheet = 'text' | 'viewer' | 'device' | 'calibrate' | 'orientation' | null;
 
 /**
  * Dashboard — one live-translation experience for one or two hands.
@@ -87,22 +91,53 @@ export function DashboardScreen({
   onOpenSettings,
   onOpenAccount,
   onOpenTextboard,
+  onOpenMl,
 }: DashboardScreenProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const {
     preferences,
     updatePreferences,
     calibration,
+    updateCalibration,
+    orientationCalibration,
+    updateOrientationCalibration,
     controllers,
     recognitionUnavailableReason,
     recognitionAvailable,
     speech: speechController,
+    ml,
   } = useAppState();
+
+  useEffect(() => {
+    ml.setLiveUpdates(true);
+    return () => {
+      ml.setLiveUpdates(false);
+    };
+  }, [ml]);
+
+  const handleTestVoice = useCallback(async () => {
+    try {
+      if (!speechController.isAvailable && speechController.probe) {
+        await speechController.probe(false);
+      }
+      const isHindi = preferences.targetLanguageCode === 'hi' || preferences.signProfileId === 'isl';
+      const phrase = isHindi
+        ? 'संकेत वाणी वाक् आउटपुट तैयार है।'
+        : 'Sanket Vaanni speech output ready.';
+      await speechController.speak(phrase, {
+        language: isHindi ? 'hi-IN' : 'en-IN',
+      });
+    } catch {
+      // Handled cleanly by speechController state / badge
+    }
+  }, [preferences.targetLanguageCode, preferences.signProfileId, speechController]);
 
   const [openSheet, setOpenSheet] = useState<OpenSheet>(null);
   const [deviceSide, setDeviceSide] = useState<GloveSide | null>(null);
   const [connectingBoth, setConnectingBoth] = useState(false);
   const [guestBannerDismissed, setGuestBannerDismissed] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
+  const lastCelebratedWord = useRef<string | null>(null);
 
   const left = useGlove('left');
   const right = useGlove('right');
@@ -120,6 +155,20 @@ export function DashboardScreen({
   const speech = useSpeechState();
 
   const detectedText = useMemo(() => outcomeText(outcome), [outcome]);
+
+  useEffect(() => {
+    if (outcome.kind === 'result' && outcome.candidate.label) {
+      const word = outcome.candidate.label.toUpperCase();
+      if (word !== 'REST' && word !== lastCelebratedWord.current) {
+        lastCelebratedWord.current = word;
+        setCelebrating(true);
+        const timer = setTimeout(() => setCelebrating(false), 2400);
+        return () => clearTimeout(timer);
+      }
+    } else if (outcome.kind === 'idle' || (outcome.kind === 'result' && outcome.candidate.label?.toUpperCase() === 'REST')) {
+      lastCelebratedWord.current = null;
+    }
+  }, [outcome]);
 
   /**
    * Speak what was recognised, when the user has switched speech on.
@@ -263,6 +312,15 @@ export function DashboardScreen({
       {/* 3 — Approved interactive 3D orb with theme palette control. */}
       <OrbStage signal={orbSignal} detail={orbDetail} testID="orb-stage" />
 
+      {celebrating && detectedText ? (
+        <View style={styles.celebrationBanner} testID="recognition-celebration">
+          <Icon name="check" size={16} color={palette.success} />
+          <AppText variant="label" color={palette.success} style={{ marginLeft: spacing.xs }}>
+            Recognised: {detectedText}
+          </AppText>
+        </View>
+      ) : null}
+
       {/* 4 — Detected text / recognition card immediately below the orb. */}
       <DetectedTextCard
         text={detectedText}
@@ -288,11 +346,17 @@ export function DashboardScreen({
       {/* 5 — Approved Speech Output waveform and ON/OFF switch. */}
       <VoicePanel
         enabled={preferences.voiceEnabled}
-        onToggle={(next) => updatePreferences({ voiceEnabled: next })}
+        onToggle={(next) => {
+          if (next && speechController.probe) {
+            void speechController.probe(false);
+          }
+          updatePreferences({ voiceEnabled: next });
+        }}
         available={speech.available}
         unavailableReason={speech.unavailableReason}
         phrase={detectedText}
         speaking={speech.isSpeaking}
+        onTestVoice={handleTestVoice}
         testID="voice-panel"
       />
 
@@ -304,8 +368,39 @@ export function DashboardScreen({
         testID="hand-viewer"
       />
 
+      <ActionButton
+        label="3D Hand Calibration"
+        tone="secondary"
+        icon="hand"
+        onPress={() => {
+          setDeviceSide(deviceSide ?? 'left');
+          setOpenSheet('orientation');
+        }}
+        accessibilityLabel="Calibrate 3D Hand Orientation"
+        accessibilityHint="Opens the 6-step interactive physical orientation calibration wizard"
+      />
+
+      {onOpenMl !== undefined && (
+        <ActionButton
+          label="ML Studio: Record & Train Signs"
+          tone="secondary"
+          icon="hand"
+          onPress={onOpenMl}
+          accessibilityLabel="Open ML Studio"
+          accessibilityHint="Capture sign gestures, train 5-word model, and live inference"
+        />
+      )}
+
       {/* 7 — Secondary device, finger readings, calibration, and diagnostics. */}
-      <FingerReadings gloves={gloves} calibration={calibration} testID="finger-readings" />
+      <FingerReadings
+        gloves={gloves}
+        calibration={calibration}
+        onOpenCalibration={(side) => {
+          setDeviceSide(side);
+          setOpenSheet('calibrate');
+        }}
+        testID="finger-readings"
+      />
 
       <DiagnosticsCard gloves={gloves} outcome={outcome} live={live} testID="diagnostics-card" />
 
@@ -341,6 +436,30 @@ export function DashboardScreen({
         }}
         onRescan={(side) => {
           void actions[side].scan();
+        }}
+      />
+
+      <CalibrationModal
+        visible={openSheet === 'calibrate'}
+        gloves={gloves}
+        currentCalibration={calibration}
+        initialSide={deviceSide ?? 'left'}
+        onClose={closeSheet}
+        onSaveCalibration={async (side, profile) => {
+          await updateCalibration(side, profile);
+          setOpenSheet(null);
+        }}
+      />
+
+      <OrientationCalibrationModal
+        visible={openSheet === 'orientation'}
+        gloves={gloves}
+        currentProfile={orientationCalibration}
+        initialSide={deviceSide ?? 'left'}
+        onClose={closeSheet}
+        onSaveProfile={async (side, profile) => {
+          await updateOrientationCalibration(side, profile);
+          setOpenSheet(null);
         }}
       />
     </Screen>
@@ -640,8 +759,7 @@ function DeviceSheet({
         <View style={[styles.notice, { backgroundColor: palette.surfaceSunken }]}>
           <Icon name="info" size={14} color={palette.textMuted} />
           <AppText variant="caption" color={palette.textMuted} style={styles.noticeText}>
-            Device names come from the scan. The glove protocol and its service identifiers are
-            not verified, so a device that appears here may not be a Sanket Vaanni glove.
+            Only verified compatible Sanket Vaanni gloves are listed. Connecting verifies required GATT services, data characteristics, and side assignment.
           </AppText>
         </View>
       </View>
@@ -669,6 +787,18 @@ const makeStyles = (palette: Palette) =>
   StyleSheet.create({
     bannerSlot: {
       marginBottom: spacing.md,
+    },
+    celebrationBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      backgroundColor: palette.card,
+      borderColor: palette.success,
+      borderWidth: 1,
+      borderRadius: radii.md,
+      marginBottom: spacing.sm,
     },
     sheetBody: {
       gap: spacing.sm,

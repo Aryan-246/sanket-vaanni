@@ -51,6 +51,8 @@ export class UnimplementedTranslator implements Translator {
   }
 }
 
+export { DirectVocabularyTranslator } from './DirectVocabularyTranslator';
+
 export type TranslationOutcome =
   /** Nothing has been recognised, so there is nothing to translate. */
   | { readonly kind: 'blocked'; readonly reason: string; readonly from: 'no-recognition' | 'no-candidate' }

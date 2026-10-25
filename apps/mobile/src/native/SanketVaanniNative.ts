@@ -70,6 +70,7 @@ export interface TranscriptSnapshot {
 
 interface SanketVaanniNativeShape {
   isAvailable(): Promise<boolean>;
+  reinitialize?(): Promise<boolean>;
   isLanguageAvailable(tag: string): Promise<LanguageAvailability>;
   /** Resolves when the platform reports the utterance finished. */
   speak(text: string, options?: SpeakOptions | null): Promise<void>;
@@ -117,6 +118,19 @@ export async function nativeSpeechReady(): Promise<boolean> {
   const module = requireNative();
   if (!module) return false;
   try {
+    return await module.isAvailable();
+  } catch {
+    return false;
+  }
+}
+
+export async function nativeReinitializeSpeech(): Promise<boolean> {
+  const module = requireNative();
+  if (!module) return false;
+  try {
+    if (typeof module.reinitialize === 'function') {
+      return await module.reinitialize();
+    }
     return await module.isAvailable();
   } catch {
     return false;

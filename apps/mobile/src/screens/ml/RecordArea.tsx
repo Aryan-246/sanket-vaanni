@@ -180,6 +180,12 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               says which sensor moved — not which hand you meant to use.
             </AppText>
 
+            {side === 'left' ? (
+              <NoteCard tone="warning" testID="left-glove-degraded-warning">
+                Experimental Capture (Left Glove): Middle and Ring channels are currently degraded (reporting low/zero). Capture proceeds using active channels (Thumb, Index, Pinky, Accel, Gyro). Gestures relying on Middle/Ring may have lower precision until hardware repair.
+              </NoteCard>
+            ) : null}
+
             <ActionButton
               label="Start a recording session"
               icon="plus"
@@ -232,11 +238,18 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               title="No signs are defined yet"
               body="A window has to be filed under a sign you have named. Nothing here reads a name off the motion, so this is the one step that cannot be skipped."
               action={
-                <ActionButton
-                  label="Define a sign"
-                  tone="secondary"
-                  onPress={() => onOpenArea('dataset')}
-                />
+                <View style={styles.buttonRow}>
+                  <ActionButton
+                    label="Load 5 Starter Signs (ASL)"
+                    tone="primary"
+                    onPress={() => { void ml.store.ensureCanonicalLabels(data.languageId); }}
+                  />
+                  <ActionButton
+                    label="Define a custom sign"
+                    tone="secondary"
+                    onPress={() => onOpenArea('dataset')}
+                  />
+                </View>
               }
             />
           ) : (

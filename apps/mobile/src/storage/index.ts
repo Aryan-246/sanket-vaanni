@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AppPreferences, ThemeMode } from '../app/preferences';
 import { parsePreferences } from '../app/preferences';
 import type { CalibrationProfile } from '../sensors/calibration';
+import type { OrientationCalibrationProfile } from '../sensors/orientationCalibration';
 import type { AccentColorId } from '../theme/palette';
 import { ACCENT_COLOR_IDS } from '../theme/palette';
 
@@ -27,6 +28,7 @@ import { ACCENT_COLOR_IDS } from '../theme/palette';
 const KEYS = {
   selectedProfile: 'sv/v1/selected-profile',
   calibration: (side: string) => `sv/v1/calibration/${side}`,
+  orientationCalibration: (side: string) => `sv/v1/orientation-calibration/${side}`,
   history: 'sv/v1/history',
   themeMode: 'sv/v1/theme-mode',
   accentColor: 'sv/v1/accent-color',
@@ -72,6 +74,8 @@ export interface Storage {
   setSelectedProfileId(profileId: string): Promise<void>;
   getCalibration(side: string): Promise<CalibrationProfile | null>;
   setCalibration(calibration: CalibrationProfile): Promise<void>;
+  getOrientationCalibration(side: string): Promise<OrientationCalibrationProfile | null>;
+  setOrientationCalibration(profile: OrientationCalibrationProfile): Promise<void>;
   getHistory(): Promise<HistoryEntry[]>;
   addHistoryEntry(entry: HistoryEntry): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
@@ -121,6 +125,17 @@ export function createAsyncStorage(): Storage {
       await AsyncStorage.setItem(
         KEYS.calibration(calibration.side),
         JSON.stringify(calibration),
+      );
+    },
+
+    async getOrientationCalibration(side) {
+      const raw = await AsyncStorage.getItem(KEYS.orientationCalibration(side));
+      return parseJson<OrientationCalibrationProfile>(raw);
+    },
+    async setOrientationCalibration(profile) {
+      await AsyncStorage.setItem(
+        KEYS.orientationCalibration(profile.side),
+        JSON.stringify(profile),
       );
     },
 
@@ -197,6 +212,12 @@ export function createInMemoryStorage(): Storage {
     },
     async setCalibration(calibration) {
       map.set(KEYS.calibration(calibration.side), JSON.stringify(calibration));
+    },
+    async getOrientationCalibration(side) {
+      return parseJson<OrientationCalibrationProfile>(read(KEYS.orientationCalibration(side)));
+    },
+    async setOrientationCalibration(profile) {
+      map.set(KEYS.orientationCalibration(profile.side), JSON.stringify(profile));
     },
     async getHistory() {
       const parsed = parseJson<HistoryEntry[]>(read(KEYS.history));

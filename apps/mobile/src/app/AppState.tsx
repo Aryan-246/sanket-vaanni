@@ -15,15 +15,24 @@ import { DEFAULT_PREFERENCES } from './preferences';
 import { GloveController, type GloveSnapshot } from '../ble/controller';
 import { MockTransport } from '../ble/mockTransport';
 import type { GloveSide, GloveTransport, SuspendableTransport } from '../ble/types';
-import { DEFAULT_PROFILE_ID, findProfile, UnimplementedRecogniser } from '../recognition';
+import { DEFAULT_PROFILE_ID, findProfile, MlRecogniser, UnimplementedRecogniser } from '../recognition';
 import type { SignLanguageProfile } from '../recognition';
 import type { Recogniser } from '../recognition';
 import { planInput, type InputAvailability, type InputPlan } from '../recognition/input';
 import { evaluateRecognition, type RecognitionOutcome } from '../recognition/outcome';
 import { useViewerFrame } from '../hands/usePose';
-import type { PoseSource } from '../hands/pose';
+import { createDefaultNeutralPose, type PoseSource } from '../hands/pose';
 import type { ViewerFrame } from '../hands/viewer';
-import { createDemoCalibration, type CalibrationProfile } from '../sensors/calibration';
+import {
+  createDemoCalibration,
+  createHardwareDefaultCalibration,
+  isCalibrationUsable,
+  type CalibrationProfile,
+} from '../sensors/calibration';
+import {
+  createDefaultOrientationProfile,
+  type OrientationCalibrationProfile,
+} from '../sensors/orientationCalibration';
 import { PoseStream } from '../hands/stream';
 import { createSpeaker } from '../speech/createSpeaker';
 import type { Speaker, SpeechState } from '../speech';
@@ -38,8 +47,10 @@ import { AnnouncementsReader } from '../announcements';
 import type { AnnouncementsState } from '../announcements';
 import { PushController } from '../notifications';
 import type { PushState } from '../notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { apiClient } from '../api/client';
 import { createAsyncStorage, type Storage } from '../storage';
-import { UnimplementedTranslator, type Translator } from '../translation';
+import { DirectVocabularyTranslator, UnimplementedTranslator, type Translator } from '../translation';
 
 export interface AppStateValue {
   readonly storage: Storage;
@@ -56,6 +67,9 @@ export interface AppStateValue {
   readonly poseStreams: Readonly<Record<GloveSide, PoseStream>>;
   readonly profile: SignLanguageProfile;
   readonly calibration: Readonly<Record<GloveSide, CalibrationProfile>>;
+  readonly updateCalibration: (side: GloveSide, profile: CalibrationProfile) => Promise<void>;
+  readonly orientationCalibration: Readonly<Record<GloveSide, OrientationCalibrationProfile>>;
+  readonly updateOrientationCalibration: (side: GloveSide, profile: OrientationCalibrationProfile) => Promise<void>;
   readonly recogniser: Recogniser;
   readonly speaker: Speaker;
   /**
@@ -160,11 +174,23 @@ export function AppStateProvider({
 }: AppStateProviderProps): React.JSX.Element {
   const controllersRef = useRef<Record<GloveSide, GloveController> | null>(null);
   if (controllersRef.current === null) {
+    const leftCal =
+      leftTransport && !leftTransport.isSynthetic
+        ? createHardwareDefaultCalibration('left')
+        : createDemoCalibration('left');
+    const rightCal =
+      transport && !transport.isSynthetic
+        ? createHardwareDefaultCalibration('right')
+        : createDemoCalibration('right');
+
     controllersRef.current = {
-      right: new GloveController('right', transport ?? new MockTransport('right')),
+      right: new GloveController('right', transport ?? new MockTransport('right'), {
+        calibration: rightCal,
+      }),
       left: new GloveController(
         'left',
         leftTransport ?? new MockTransport('left', { sideOffsetMs: 0 }),
+        { calibration: leftCal },
       ),
     };
   }
@@ -173,8 +199,8 @@ export function AppStateProvider({
   const poseStreamsRef = useRef<Record<GloveSide, PoseStream> | null>(null);
   if (poseStreamsRef.current === null) {
     poseStreamsRef.current = {
-      right: new PoseStream('right'),
-      left: new PoseStream('left'),
+      right: new PoseStream('right', { neutral: createDefaultNeutralPose('right') }),
+      left: new PoseStream('left', { neutral: createDefaultNeutralPose('left') }),
     };
   }
   const poseStreams = poseStreamsRef.current;
@@ -216,9 +242,139 @@ export function AppStateProvider({
     };
   }, [activeStorage]);
 
-  const calibration = useMemo<Readonly<Record<GloveSide, CalibrationProfile>>>(
-    () => ({ left: createDemoCalibration('left'), right: createDemoCalibration('right') }),
-    [],
+  const [calibrationState, setCalibrationState] = useState<Readonly<Record<GloveSide, CalibrationProfile>>>(() => ({
+    left:
+      leftTransport && !leftTransport.isSynthetic
+        ? createHardwareDefaultCalibration('left')
+        : createDemoCalibration('left'),
+    right:
+      transport && !transport.isSynthetic
+        ? createHardwareDefaultCalibration('right')
+        : createDemoCalibration('right'),
+  }));
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      activeStorage.getCalibration('left'),
+      activeStorage.getCalibration('right'),
+    ])
+      .then(([storedLeft, storedRight]) => {
+        if (cancelled) return;
+        setCalibrationState((prev) => {
+          const next = { ...prev };
+          if (storedLeft && isCalibrationUsable(storedLeft)) {
+            next.left = storedLeft;
+            controllers.left.setCalibration(storedLeft);
+          } else if (storedLeft) {
+            // Self-heal: stored calibration was corrupted or zero-span, replace with hardware default
+            const clean = createHardwareDefaultCalibration('left');
+            next.left = clean;
+            controllers.left.setCalibration(clean);
+            activeStorage.setCalibration(clean).catch(() => undefined);
+          }
+          if (storedRight && isCalibrationUsable(storedRight)) {
+            next.right = storedRight;
+            controllers.right.setCalibration(storedRight);
+          } else if (storedRight) {
+            // Self-heal: stored calibration was corrupted or zero-span, replace with hardware default
+            const clean = createHardwareDefaultCalibration('right');
+            next.right = clean;
+            controllers.right.setCalibration(clean);
+            activeStorage.setCalibration(clean).catch(() => undefined);
+          }
+          return next;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStorage, controllers]);
+
+  const updateCalibration = useCallback(
+    async (side: GloveSide, profile: CalibrationProfile) => {
+      controllers[side].setCalibration(profile);
+      setCalibrationState((prev) => ({
+        ...prev,
+        [side]: profile,
+      }));
+      await activeStorage.setCalibration(profile);
+    },
+    [activeStorage, controllers],
+  );
+
+  const [orientationCalibrationState, setOrientationCalibrationState] = useState<
+    Readonly<Record<GloveSide, OrientationCalibrationProfile>>
+  >(() => ({
+    left: createDefaultOrientationProfile('left'),
+    right: createDefaultOrientationProfile('right'),
+  }));
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      activeStorage.getOrientationCalibration('left'),
+      activeStorage.getOrientationCalibration('right'),
+    ])
+      .then(([storedLeft, storedRight]) => {
+        if (cancelled) return;
+        setOrientationCalibrationState((prev) => {
+          const next = { ...prev };
+          if (storedLeft) {
+            next.left = storedLeft;
+            poseStreams.left.setNeutral({
+              fingers: [0, 0, 0, 0, 0],
+              wrist: {
+                pitch: (storedLeft.restPitch * Math.PI) / 180,
+                roll: (storedLeft.restRoll * Math.PI) / 180,
+                yaw: null,
+              },
+              pitchSign: storedLeft.pitchSign,
+              rollSign: storedLeft.rollSign,
+            });
+          }
+          if (storedRight) {
+            next.right = storedRight;
+            poseStreams.right.setNeutral({
+              fingers: [0, 0, 0, 0, 0],
+              wrist: {
+                pitch: (storedRight.restPitch * Math.PI) / 180,
+                roll: (storedRight.restRoll * Math.PI) / 180,
+                yaw: null,
+              },
+              pitchSign: storedRight.pitchSign,
+              rollSign: storedRight.rollSign,
+            });
+          }
+          return next;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStorage, poseStreams]);
+
+  const updateOrientationCalibration = useCallback(
+    async (side: GloveSide, profile: OrientationCalibrationProfile) => {
+      poseStreams[side].setNeutral({
+        fingers: [0, 0, 0, 0, 0],
+        wrist: {
+          pitch: (profile.restPitch * Math.PI) / 180,
+          roll: (profile.restRoll * Math.PI) / 180,
+          yaw: null,
+        },
+        pitchSign: profile.pitchSign,
+        rollSign: profile.rollSign,
+      });
+      setOrientationCalibrationState((prev) => ({
+        ...prev,
+        [side]: profile,
+      }));
+      await activeStorage.setOrientationCalibration(profile);
+    },
+    [activeStorage, poseStreams],
   );
 
   const profile = useMemo(
@@ -231,14 +387,46 @@ export function AppStateProvider({
     [preferences.signProfileId],
   );
 
-  const recogniser = useMemo(() => new UnimplementedRecogniser(profile), [profile]);
+  /**
+   * The learning centre.
+   *
+   * Built once and held in a ref, like the glove controllers, rather than in a
+   * `useMemo`. That is not a style choice: the recorder holds a session in
+   * progress, and a dependency that changed while someone was recording would
+   * construct a second centre and drop the windows the first one had collected.
+   * The sign language is a *default* here and is kept in step by the effect
+   * below, so changing it re-points the same centre instead of replacing it.
+   */
+  const mlRef = useRef<MlCentre | null>(null);
+  if (mlRef.current === null) {
+    mlRef.current = new MlCentre({
+      storage: activeStorage,
+      newId: createIdFactory(),
+      now: () => Date.now(),
+      defaultLanguageId: profile.id,
+      sources: { left: controllers.left, right: controllers.right },
+      gloveInfo: (side) => {
+        const glove = controllers[side].getSnapshot();
+        return {
+          connected: glove.source !== 'none',
+          real: !glove.synthetic,
+          transportName: glove.transportName,
+          calibrationVersion: controllers[side].getCalibration().version,
+        };
+      },
+      picker: new UnavailablePicker(),
+    });
+  }
+  const ml = mlRef.current;
+
+  const recogniser = useMemo(() => new MlRecogniser(profile, ml), [profile, ml]);
   /**
    * The device's own speech engine where one exists, otherwise a speaker that
    * says why it cannot speak. Chosen at runtime, because whether a phone can
    * talk depends on the phone rather than on the build.
    */
   const speaker = useMemo(() => createSpeaker(), []);
-  const translator = useMemo(() => new UnimplementedTranslator(), []);
+  const translator = useMemo(() => new DirectVocabularyTranslator(), []);
 
   /**
    * Speech state, shared by everything that needs to know whether the app is
@@ -291,53 +479,6 @@ export function AppStateProvider({
    * until they turn notifications on — see `notifications/controller.ts`.
    */
   const push = useMemo(() => new PushController({ storage: activeStorage }), [activeStorage]);
-
-  /**
-   * The learning centre.
-   *
-   * Built once and held in a ref, like the glove controllers, rather than in a
-   * `useMemo`. That is not a style choice: the recorder holds a session in
-   * progress, and a dependency that changed while someone was recording would
-   * construct a second centre and drop the windows the first one had collected.
-   * The sign language is a *default* here and is kept in step by the effect
-   * below, so changing it re-points the same centre instead of replacing it.
-   *
-   * `newId` is the production factory. Tests construct their own `MlCentre` with
-   * a counter, which is why every id in `ml/` is injected rather than generated
-   * where it is needed.
-   */
-  const mlRef = useRef<MlCentre | null>(null);
-  if (mlRef.current === null) {
-    mlRef.current = new MlCentre({
-      storage: activeStorage,
-      newId: createIdFactory(),
-      now: () => Date.now(),
-      defaultLanguageId: profile.id,
-      sources: { left: controllers.left, right: controllers.right },
-      gloveInfo: (side) => {
-        const glove = controllers[side].getSnapshot();
-        /*
-         * `source !== 'none'` is the honest test for "there is something to
-         * record from": it is `none` before the first packet as well as when no
-         * glove is connected, so a session cannot be opened against a link that
-         * is up but silent.
-         */
-        return {
-          connected: glove.source !== 'none',
-          real: !glove.synthetic,
-          transportName: glove.transportName,
-          calibrationVersion: calibration[side].version,
-        };
-      },
-      /*
-       * This build has no picker, and the object it gets says so in a sentence
-       * rather than throwing from a screen. See `ml/media.ts`: adding a picker
-       * changes the native build and needs its own device test.
-       */
-      picker: new UnavailablePicker(),
-    });
-  }
-  const ml = mlRef.current;
 
   // Dispose on unmount so no simulator interval survives the provider.
   useEffect(() => {
@@ -393,6 +534,66 @@ export function AppStateProvider({
    */
   useEffect(() => {
     ml.setLanguage(profile.id);
+  }, [ml, profile.id]);
+
+  /**
+   * Published Model Sync:
+   * Fetches the globally published model from the backend for the active language profile.
+   * If a new version is published and matches the language, auto-imports and activates it
+   * for live glove inference on both Normal User and Guest clients.
+   * Caches the package in AsyncStorage for offline resilience.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const syncPublishedModel = async () => {
+      try {
+        const cacheKey = `@sanket_vaanni:published_model_${profile.id}`;
+        let modelPkgToImport: unknown = null;
+
+        const res = await apiClient.getPublishedModel(profile.id);
+        if (!cancelled && res.ok && res.data.published && res.data.modelPackage) {
+          modelPkgToImport = res.data.modelPackage;
+          void AsyncStorage.setItem(cacheKey, JSON.stringify(res.data.modelPackage)).catch(() => undefined);
+        } else if (!cancelled) {
+          const cachedStr = await AsyncStorage.getItem(cacheKey).catch(() => null);
+          if (cachedStr) {
+            try {
+              modelPkgToImport = JSON.parse(cachedStr);
+            } catch {
+              // ignore parse failure
+            }
+          }
+        }
+
+        if (cancelled || !modelPkgToImport) return;
+
+        const pkg = modelPkgToImport as { contract?: { version?: number; languageId?: string } };
+        if (pkg.contract?.languageId !== profile.id) return;
+
+        const existingModels = ml.store.getSnapshot().models;
+        const alreadyPresent = existingModels.some(
+          (m) =>
+            m.languageId === profile.id &&
+            (m.importedFrom?.sourceVersion === pkg.contract?.version ||
+              (m.status === 'active' && m.importedFrom?.sourceVersion === pkg.contract?.version)),
+        );
+
+        if (!alreadyPresent) {
+          const importRes = await ml.store.importModel(modelPkgToImport);
+          if (importRes.ok) {
+            await ml.activate(importRes.data.summary.id);
+          }
+        }
+      } catch {
+        // network or storage failure - silent graceful fallback
+      }
+    };
+
+    void syncPublishedModel();
+
+    return () => {
+      cancelled = true;
+    };
   }, [ml, profile.id]);
 
   /**
@@ -452,7 +653,10 @@ export function AppStateProvider({
       controllers,
       poseStreams,
       profile,
-      calibration,
+      calibration: calibrationState,
+      updateCalibration,
+      orientationCalibration: orientationCalibrationState,
+      updateOrientationCalibration,
       recogniser,
       speaker,
       speech,
@@ -472,7 +676,10 @@ export function AppStateProvider({
       controllers,
       poseStreams,
       profile,
-      calibration,
+      calibrationState,
+      updateCalibration,
+      orientationCalibrationState,
+      updateOrientationCalibration,
       recogniser,
       speaker,
       speech,

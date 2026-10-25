@@ -89,10 +89,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
   }
 }
 
+export interface PublishedModelResponse {
+  readonly ok: boolean;
+  readonly published: boolean;
+  readonly languageProfile: string;
+  readonly version?: string;
+  readonly publishedAt?: string;
+  readonly publishedBy?: string | null;
+  readonly modelPackage?: any;
+  readonly message?: string;
+}
+
+export interface ModelVersionResponse {
+  readonly ok: boolean;
+  readonly published: boolean;
+  readonly languageProfile: string;
+  readonly version: string | null;
+  readonly publishedAt: string | null;
+  readonly vocabularySize: number;
+  readonly publishedBy?: string | null;
+  readonly publishReason?: string | null;
+}
+
 export const apiClient = {
-  /** Liveness check. The only endpoint the backend currently exposes. */
+  /** Liveness check. */
   health(): Promise<ApiResult<HealthResponse>> {
     return request<HealthResponse>('/health');
+  },
+  /** Retrieves the active published sign language model for the given profile. */
+  getPublishedModel(languageProfile: string): Promise<ApiResult<PublishedModelResponse>> {
+    return request<PublishedModelResponse>(`/models/published/${encodeURIComponent(languageProfile)}`);
+  },
+  /** Queries current published version and vocabulary count. */
+  getModelVersion(languageProfile: string): Promise<ApiResult<ModelVersionResponse>> {
+    return request<ModelVersionResponse>(`/models/version/${encodeURIComponent(languageProfile)}`);
   },
   baseUrl: config.apiBaseUrl,
   isConfigured: config.isApiConfigured,

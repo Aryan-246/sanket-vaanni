@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, View } from 'react-native';
 
 import { AppText } from './AppText';
+import { ActionButton } from './ActionButton';
 import { Badge } from './Badge';
 import { Card } from './Card';
 import { FlexBar } from './FlexBar';
@@ -18,6 +19,7 @@ import { MIN_TOUCH_TARGET, motion, radii, spacing } from '../theme';
 export interface FingerReadingsProps {
   gloves: Readonly<Record<GloveSide, GloveSnapshot>>;
   calibration: Readonly<Record<GloveSide, CalibrationProfile>>;
+  onOpenCalibration?: (side: GloveSide) => void;
   testID?: string;
 }
 
@@ -43,6 +45,7 @@ const SIDES: readonly GloveSide[] = ['left', 'right'];
 export function FingerReadings({
   gloves,
   calibration,
+  onOpenCalibration,
   testID,
 }: FingerReadingsProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
@@ -109,6 +112,7 @@ export function FingerReadings({
                 side={side}
                 snapshot={gloves[side]}
                 calibration={calibration[side]}
+                onOpenCalibration={onOpenCalibration}
               />
             ))
           )}
@@ -129,10 +133,12 @@ function HandReadings({
   side,
   snapshot,
   calibration,
+  onOpenCalibration,
 }: {
   side: GloveSide;
   snapshot: GloveSnapshot;
   calibration: CalibrationProfile;
+  onOpenCalibration?: (side: GloveSide) => void;
 }): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const simulated = isSimulatedLink(snapshot.link);
@@ -157,6 +163,17 @@ function HandReadings({
           tone={simulated ? 'demo' : 'accent'}
         />
       ))}
+
+      {onOpenCalibration && (
+        <View style={{ marginTop: spacing.sm }}>
+          <ActionButton
+            label={`Calibrate ${side === 'left' ? 'Left' : 'Right'} Glove`}
+            tone="secondary"
+            compact
+            onPress={() => onOpenCalibration(side)}
+          />
+        </View>
+      )}
     </View>
   );
 }

@@ -67,8 +67,8 @@
 
   // The MPU6050 gives wrist tilt only, already in radians. Yaw is not
   // measurable and is never synthesised here.
-  var WRIST_PITCH_LIMIT = 1.4;
-  var WRIST_ROLL_LIMIT = 1.6;
+  var WRIST_PITCH_LIMIT = Math.PI / 2 + 0.1; // up to 95 degrees
+  var WRIST_ROLL_LIMIT = Math.PI; // full forearm rotation up to 180 degrees
 
   var scene = null;
   var camera = null;
@@ -265,9 +265,9 @@
     var halfFovTan = Math.tan((camera.fov * RAD) / 2);
     var fitVertical = size.y / 2 / halfFovTan;
     var fitHorizontal = size.x / 2 / (halfFovTan * camera.aspect);
-    // 1.12 leaves a margin so fingertips never touch the viewport edge while
-    // still letting the hand read as the centrepiece of the card.
-    var distance = Math.max(fitVertical, fitHorizontal) * 1.12 + size.z / 2;
+    // 1.38 leaves a generous margin so fingertips and the wrist base never
+    // clip against viewport edges during movement, tilts or rolls.
+    var distance = Math.max(fitVertical, fitHorizontal) * 1.38 + size.z / 2;
 
     frameDistance = distance;
     camera.position.set(0, 0, distance);
@@ -307,6 +307,9 @@
    */
   function applySidePose(prefix, isLeft, fingers, wrist) {
     var bends = fingers && fingers.length ? fingers : [];
+    // The Right Hand GLB bone chain extends along -Y instead of +Y, so flexion
+    // about local X has opposite sign between Left and Right rigs.
+    var flexSign = isLeft ? 1 : -1;
 
     // --- wrist: rotation is already in radians, apply it directly ----------
     var wristBone = bonesMap[prefix];
@@ -314,7 +317,7 @@
       var w = wrist || {};
       // `pitch`/`roll` are radians and are null when no glove reports them.
       var wristRest = restOf(wristBone);
-      wristBone.rotation.x = wristRest.x + sanitizeAngle(w.pitch, WRIST_PITCH_LIMIT);
+      wristBone.rotation.x = wristRest.x + flexSign * sanitizeAngle(w.pitch, WRIST_PITCH_LIMIT);
       wristBone.rotation.z =
         wristRest.z + (isLeft ? 1 : -1) * sanitizeAngle(w.roll, WRIST_ROLL_LIMIT);
     }
@@ -324,7 +327,7 @@
     for (var t = 1; t <= 4; t++) {
       var thumbBone = bonesMap[prefix + 'Thumb' + t];
       if (!thumbBone) continue;
-      thumbBone.rotation.x = restOf(thumbBone).x + thumb * CHAIN_DEG.thumb[t] * RAD;
+      thumbBone.rotation.x = restOf(thumbBone).x + flexSign * thumb * CHAIN_DEG.thumb[t] * RAD;
     }
     var thumbBase = bonesMap[prefix + 'Thumb1'];
     if (thumbBase) {
@@ -338,7 +341,7 @@
       for (var j = 1; j <= 4; j++) {
         var bone = bonesMap[prefix + FINGERS[f] + j];
         if (!bone) continue;
-        bone.rotation.x = restOf(bone).x + bend * CHAIN_DEG.finger[j] * RAD;
+        bone.rotation.x = restOf(bone).x + flexSign * bend * CHAIN_DEG.finger[j] * RAD;
       }
     }
   }
@@ -627,27 +630,11 @@
     // Measured through the live rig, palm normals in world space:
     //
     //     right hand, shared yaw   (+1.4208)  ->  z = +0.8977   palm
-    //     left hand,  shared yaw   (+1.4208)  ->  z = -0.9642   BACK   <- defect
-    //     left hand,  mirrored yaw (-1.4208)  ->  z = +0.8977   palm
-    //
-    // The mirrored result is the exact X mirror of the right hand's,
-    // (-0.4404, -0.0107, +0.8977) against (0.4405, -0.0107, +0.8977), and the
-    // resting tilt comes out mirrored too: -7.24 degrees on the left against
-    // +7.23 on the right.
-    //
-    // Viewing the other face of a hand reverses the apparent direction of every
-    // rotation whose axis lies in the screen plane, so this flip also reverses
-    // the left hand's wrist pitch and finger curls: pitch reads -10.94 degrees
-    // against the right hand's +10.88, and each finger bend mirrors its opposite
-    // number to within 0.0007. Both were *wrong* before the flip -- with the
-    // shared yaw the left hand's pitch ran +14.54 degrees, the same direction as
-    // the right instead of the opposite one. The wrist roll is the one channel
-    // that still does not mirror (left -45.50 against right -49.23, both the
-    // same way), because it is the one channel `applySidePose` multiplies by
-    // `(isLeft ? 1 : -1)`; see the note there.
+    // Physical reference posture: hand resting flat on a surface, with palm
+    // facing down against the surface and dorsal side facing the user/camera.
     var yaw = Math.PI / 2 - 0.15;
     pivot.add(currentModel);
-    pivot.rotation.set(Math.PI + 0.12, activeSide === 'left' ? -yaw : yaw, 0);
+    pivot.rotation.set(Math.PI - 0.25, activeSide === 'left' ? yaw : -yaw, 0);
     pivot.updateMatrixWorld(true);
 
     frameModel();

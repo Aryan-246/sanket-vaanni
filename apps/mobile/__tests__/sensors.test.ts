@@ -7,6 +7,7 @@ import {
   applyCalibration,
   CalibrationError,
   createDemoCalibration,
+  createHardwareDefaultCalibration,
 } from '../src/sensors/calibration';
 import { createProcessingPipeline, createSmoother, flexMagnitude } from '../src/sensors/processing';
 import type { FlexReading, RawSample } from '../src/sensors/types';
@@ -157,3 +158,40 @@ describe('flexMagnitude', () => {
     expect(flexMagnitude([0, 0, 0, 0, 0])).toBe(0);
   });
 });
+
+describe('createHardwareDefaultCalibration', () => {
+  it('returns valid 5-channel calibration for left glove', () => {
+    const profile = createHardwareDefaultCalibration('left');
+    expect(profile.side).toBe('left');
+    expect(profile.channels).toHaveLength(FLEX_CHANNEL_COUNT);
+    profile.channels.forEach((ch) => {
+      expect(ch.rest).not.toBe(ch.fullFlex);
+    });
+  });
+
+  it('correctly maps Left Glove V11 real hardware rest and flex values', () => {
+    const profile = createHardwareDefaultCalibration('left');
+
+    // Rest pose ADC readings: [550, 1860, 290, 340, 1960]
+    const restSample = applyCalibration(
+      rawSample({ side: 'left', flex: [550, 1860, 290, 340, 1960] }),
+      profile,
+    );
+    expect(restSample.flex).toEqual([0, 0, 0, 0, 0]);
+
+    // Full flex pose ADC readings: [5120, 5836, 520, 1088, 990]
+    const flexSample = applyCalibration(
+      rawSample({ side: 'left', flex: [5120, 5836, 520, 1088, 990] }),
+      profile,
+    );
+    expect(flexSample.flex).toEqual([1, 1, 1, 1, 1]);
+
+    // Clamps out-of-range hardware spikes
+    const clampedSample = applyCalibration(
+      rawSample({ side: 'left', flex: [300, 6500, 200, 1500, 500] }),
+      profile,
+    );
+    expect(clampedSample.flex).toEqual([0, 1, 0, 1, 1]);
+  });
+});
+

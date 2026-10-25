@@ -92,6 +92,23 @@ export class SpeechController {
 
   getSnapshot = (): SpeechState => this.state;
 
+  get isAvailable(): boolean {
+    return this.state.available;
+  }
+
+  probe = async (forceReinit: boolean = false): Promise<boolean> => {
+    if (this.speaker.probe) {
+      const ready = await this.speaker.probe(forceReinit);
+      this.emit({
+        available: this.speaker.isAvailable,
+        unavailableReason: this.speaker.unavailableReason,
+        lastError: ready ? null : this.state.lastError,
+      });
+      return ready;
+    }
+    return this.state.available;
+  };
+
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => {

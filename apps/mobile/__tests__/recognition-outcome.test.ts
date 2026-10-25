@@ -222,7 +222,7 @@ describe('evaluateRecognition blocked states', () => {
   it('reports an empty vocabulary as blocked rather than idle', () => {
     // The shipped profiles are all in this state. "Waiting for a gesture" would
     // tell the user to hold a sign up for a model that cannot read any.
-    const empty = findProfile(DEFAULT_PROFILE_ID)!;
+    const empty = findProfile('bsl')!;
     const outcome = evaluateRecognition(
       recogniser({ available: true, result: result(0.9) }),
       empty,

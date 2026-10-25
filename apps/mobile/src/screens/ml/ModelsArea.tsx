@@ -27,7 +27,7 @@
  * caveats `metrics.ts` attached — a single-session test set, a class with no test
  * examples. Nothing here converts a score into a probability.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AppText } from '../../components/AppText';
@@ -37,7 +37,10 @@ import { Card } from '../../components/Card';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/EmptyState';
 import { Sheet } from '../../components/Sheet';
+import { TextField } from '../../components/TextField';
 import { Toggle } from '../../components/Toggle';
+import { publishModel, rollbackModel } from '../../admin/client';
+import { apiClient, type ModelVersionResponse } from '../../api/client';
 import {
   describeModelStatus,
   describeModelSummary,
@@ -74,6 +77,11 @@ export function ModelsArea(): React.JSX.Element {
   const [activating, setActivating] = useState<ModelSummary | null>(null);
   const [deleting, setDeleting] = useState<ModelSummary | null>(null);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [publishingModel, setPublishingModel] = useState<ModelSummary | null>(null);
+  const [publishReason, setPublishReason] = useState('');
+  const [rollbackPrompt, setRollbackPrompt] = useState(false);
+  const [rollbackReason, setRollbackReason] = useState('');
+  const [serverModel, setServerModel] = useState<ModelVersionResponse | null>(null);
 
   const summary = ml.store.summary();
   const versions = useMemo(
@@ -85,6 +93,74 @@ export function ModelsArea(): React.JSX.Element {
   const progress = snapshot.training;
 
   const consent = data.settings.allowCollectedDataForTraining;
+
+  const fetchServerModel = useCallback(async () => {
+    try {
+      const res = await apiClient.getModelVersion(data.languageId);
+      if (res.ok) {
+        setServerModel(res.data);
+      }
+    } catch {
+      // offline or server unreachable
+    }
+  }, [data.languageId]);
+
+  useEffect(() => {
+    void fetchServerModel();
+  }, [fetchServerModel]);
+
+  const executePublish = async () => {
+    if (publishingModel === null || publishReason.trim().length < 3) return;
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    const exportResult = await ml.store.exportModel(publishingModel.id);
+    if (!exportResult.ok) {
+      setError(exportResult.error);
+      setBusy(false);
+      setPublishingModel(null);
+      return;
+    }
+    const res = await publishModel({
+      reason: publishReason.trim(),
+      languageProfile: data.languageId,
+      version: String(publishingModel.version),
+      modelPackage: exportResult.data,
+    });
+    setBusy(false);
+    setPublishingModel(null);
+    setPublishReason('');
+    if (res.ok) {
+      setMessage(
+        `Version ${publishingModel.version} published globally for ${data.languageId.toUpperCase()}! Other devices and guests will now receive this model.`,
+      );
+      void fetchServerModel();
+    } else {
+      setError(res.error);
+    }
+  };
+
+  const executeRollback = async () => {
+    if (rollbackReason.trim().length < 3) return;
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    const res = await rollbackModel({
+      reason: rollbackReason.trim(),
+      languageProfile: data.languageId,
+    });
+    setBusy(false);
+    setRollbackPrompt(false);
+    setRollbackReason('');
+    if (res.ok) {
+      setMessage(
+        `Rolled back published model to version ${res.data.activeVersion} for ${data.languageId.toUpperCase()}.`,
+      );
+      void fetchServerModel();
+    } else {
+      setError(res.error);
+    }
+  };
 
   const runTraining = async () => {
     setMessage(null);
@@ -353,6 +429,16 @@ export function ModelsArea(): React.JSX.Element {
                   ) : null}
                   <View style={styles.buttonRow}>
                     <ActionButton label="Open" tone="ghost" compact onPress={() => setOpenModel(model)} />
+                    <ActionButton
+                      label="Publish Globally"
+                      tone="primary"
+                      compact
+                      busy={busy}
+                      onPress={() => {
+                        setPublishingModel(model);
+                        setPublishReason('');
+                      }}
+                    />
                     {model.status !== 'active' ? (
                       <ActionButton
                         label="Put into use"
@@ -390,6 +476,76 @@ export function ModelsArea(): React.JSX.Element {
         ) : null}
       </Section>
 
+      {/* ------------------------------------------- global model distribution */}
+
+      <Section
+        label="Global Model Distribution (Server)"
+        detail="Published models are distributed globally to all connected devices and guest users via the backend."
+      >
+        <Card style={styles.stack}>
+          {serverModel?.published ? (
+            <View style={styles.stack}>
+              <View style={styles.headRow}>
+                <AppText variant="label" style={styles.grow}>
+                  Published: Version {serverModel.version}
+                </AppText>
+                <Badge label="Live Globally" tone="success" dot />
+              </View>
+              <AppText variant="caption" color={palette.textSecondary}>
+                Language: {serverModel.languageProfile?.toUpperCase()} · Published by: {serverModel.publishedBy}
+              </AppText>
+              {serverModel.publishReason ? (
+                <AppText variant="caption" color={palette.textMuted}>
+                  Reason: {serverModel.publishReason}
+                </AppText>
+              ) : null}
+              {serverModel.publishedAt ? (
+                <AppText variant="caption" color={palette.textMuted}>
+                  Published at: {new Date(serverModel.publishedAt).toLocaleString()}
+                </AppText>
+              ) : null}
+              <View style={styles.buttonRow}>
+                <ActionButton
+                  label="Roll Back Server Model"
+                  tone="danger"
+                  compact
+                  busy={busy}
+                  onPress={() => {
+                    setRollbackPrompt(true);
+                    setRollbackReason('');
+                  }}
+                />
+                <ActionButton
+                  label="Refresh Server Status"
+                  tone="ghost"
+                  compact
+                  busy={busy}
+                  onPress={() => {
+                    void fetchServerModel();
+                  }}
+                />
+              </View>
+            </View>
+          ) : (
+            <View style={styles.stack}>
+              <AppText variant="caption" color={palette.textMuted}>
+                No model is currently published on the server for {data.languageId.toUpperCase()}.
+                Client apps and guests will use their locally cached or bundled models until an Admin publishes one.
+              </AppText>
+              <ActionButton
+                label="Check Server Status"
+                tone="ghost"
+                compact
+                busy={busy}
+                onPress={() => {
+                  void fetchServerModel();
+                }}
+              />
+            </View>
+          )}
+        </Card>
+      </Section>
+
       {/* ---------------------------------------------------------- model card */}
 
       <Sheet
@@ -399,6 +555,56 @@ export function ModelsArea(): React.JSX.Element {
         description={openModel === null ? undefined : describeModelStatus(openModel)}
       >
         {openModel === null ? null : <ModelCardBody model={openModel} />}
+      </Sheet>
+
+      <Sheet
+        visible={publishingModel !== null}
+        onClose={() => setPublishingModel(null)}
+        title={publishingModel === null ? '' : `Publish v${publishingModel.version} Globally`}
+        description={`This will make Version ${publishingModel?.version} the official global model for all ${data.languageId.toUpperCase()} users. Guest and Normal User apps will automatically download and run inference with this model.`}
+      >
+        <View style={styles.sheet}>
+          <TextField
+            label="Audit / Publish Reason"
+            placeholder="e.g. Validated 5-word ASL starter vocabulary with held-out testing"
+            value={publishReason}
+            onChangeText={setPublishReason}
+          />
+          <ActionButton
+            label="Confirm Global Publication"
+            tone="primary"
+            busy={busy}
+            disabled={publishReason.trim().length < 3}
+            onPress={() => {
+              void executePublish();
+            }}
+          />
+        </View>
+      </Sheet>
+
+      <Sheet
+        visible={rollbackPrompt}
+        onClose={() => setRollbackPrompt(false)}
+        title={`Roll Back Global Model (${data.languageId.toUpperCase()})`}
+        description="Reverts the globally distributed model to the previously published version on the server. All clients will fall back on their next check."
+      >
+        <View style={styles.sheet}>
+          <TextField
+            label="Audit / Rollback Reason"
+            placeholder="e.g. Incompatible sensor range or model degraded"
+            value={rollbackReason}
+            onChangeText={setRollbackReason}
+          />
+          <ActionButton
+            label="Confirm Rollback"
+            tone="danger"
+            busy={busy}
+            disabled={rollbackReason.trim().length < 3}
+            onPress={() => {
+              void executeRollback();
+            }}
+          />
+        </View>
       </Sheet>
 
       <ConfirmDialog

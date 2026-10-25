@@ -49,12 +49,20 @@ class SanketVaanniModule(
 
   /** Promises awaiting a completion callback, keyed by utterance id. */
   private val pending = HashMap<String, Promise>()
+  private val readyWaiters = ArrayList<Promise>()
   private val utteranceCounter = AtomicInteger(0)
   private val lock = Any()
 
   init {
+    initTts(reactContext.applicationContext)
+  }
+
+  private fun initTts(context: Context) {
+    synchronized(lock) {
+      initStatus = "initialising"
+    }
     tts =
-      TextToSpeech(reactContext) { status ->
+      TextToSpeech(context) { status ->
         synchronized(lock) {
           initStatus =
             when (status) {
@@ -82,6 +90,11 @@ class SanketVaanniModule(
               },
             )
           }
+          val isReady = initStatus == "ready"
+          for (p in readyWaiters) {
+            p.resolve(isReady)
+          }
+          readyWaiters.clear()
         }
       }
   }
@@ -106,7 +119,28 @@ class SanketVaanniModule(
   /** The engine's own answer, not a guess made before asking it. */
   @ReactMethod
   fun isAvailable(promise: Promise) {
-    promise.resolve(initStatus == "ready")
+    synchronized(lock) {
+      when (initStatus) {
+        "ready" -> promise.resolve(true)
+        "failed" -> promise.resolve(false)
+        else -> readyWaiters.add(promise)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun reinitialize(promise: Promise) {
+    synchronized(lock) {
+      if (initStatus == "ready") {
+        promise.resolve(true)
+        return
+      }
+      readyWaiters.add(promise)
+      try {
+        tts?.shutdown()
+      } catch (_: Exception) {}
+      initTts(reactApplicationContext.applicationContext)
+    }
   }
 
   /**
@@ -378,6 +412,10 @@ class SanketVaanniModule(
       for (entry in outstanding) {
         entry.reject("E_TTS_DISPOSED", "The module was disposed before speech finished.")
       }
+      for (waiter in readyWaiters) {
+        waiter.resolve(false)
+      }
+      readyWaiters.clear()
     }
     tts?.stop()
     tts?.shutdown()

@@ -80,6 +80,7 @@ export class UnimplementedRecogniser implements Recogniser {
   }
 }
 
+export { MlRecogniser } from './MlRecogniser';
 export { DEFAULT_PROFILE_ID, findProfile, SIGN_LANGUAGE_PROFILES } from './profiles';
 export type { SignLanguageProfile } from './profiles';
 export {

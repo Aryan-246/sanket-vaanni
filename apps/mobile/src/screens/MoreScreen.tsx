@@ -39,15 +39,10 @@ export interface MoreScreenProps {
   onOpenProfile?: () => void;
   /** Opens About Us. */
   onOpenAbout?: () => void;
-  /**
-   * Opens the Super Admin section.
-   *
-   * Omitted — not disabled — when the signed-in account does not hold the admin
-   * role, so the row is not drawn at all. A row that is visible but refuses is a
-   * worse experience than one that does not appear, and the real authorization
-   * is enforced on the server in any case.
-   */
+  /** Opens the Super Admin section. */
   onOpenAdmin?: () => void;
+  /** Opens the ML Learning Centre. */
+  onOpenMl?: () => void;
   /** Opens the account surface, which the navigator hosts. */
   onOpenAccount?: () => void;
   initialRecoveryMode?: boolean;
@@ -70,6 +65,7 @@ export function MoreScreen({
   onOpenProfile,
   onOpenAbout,
   onOpenAdmin,
+  onOpenMl,
   onOpenAccount,
   initialRecoveryMode = false,
   onCloseAccount,
@@ -355,7 +351,7 @@ export function MoreScreen({
           value={language?.name ?? preferences.targetLanguageCode.toUpperCase()}
           description={
             language
-              ? `Spoken as ${language.speechTag}. No translation model exists yet, so no text reaches the speech engine.`
+              ? `Spoken as ${language.speechTag}. Recognised vocabulary speaks directly in ${language.name}.`
               : `Spoken as ${preferences.targetLanguageCode.toUpperCase()}.`
           }
           icon="volume"
@@ -431,8 +427,19 @@ export function MoreScreen({
           label="App"
           value={build === null ? `${PRODUCT_NAME}` : `${PRODUCT_NAME} ${build.versionName}`}
           description="An offline-first companion for a two-glove sign-language device."
-          last={onOpenAdmin === undefined}
+          last={onOpenAdmin === undefined && onOpenMl === undefined}
         />
+        {onOpenMl !== undefined && (
+          <ListRow
+            label="Learning & Vocabulary"
+            value="ML Studio"
+            description="Capture gestures, train 5-word models, and test live inference."
+            icon="hand"
+            onPress={onOpenMl}
+            last={onOpenAdmin === undefined}
+            testID="ml-studio-row"
+          />
+        )}
         {onOpenAdmin !== undefined && (
           <ListRow
             label="Super Admin"

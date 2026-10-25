@@ -97,7 +97,7 @@ function appAudit(
   overrides: Partial<Parameters<typeof appFindings>[0]> = {},
 ): Finding[] {
   return appFindings({
-    profile: findProfile('isl')!,
+    profile: findProfile('bsl')!,
     preferences: DEFAULT_PREFERENCES,
     translator: new UnimplementedTranslator(),
     speaker: new UnavailableSpeaker(),

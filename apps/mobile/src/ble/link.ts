@@ -77,7 +77,7 @@ export function linkReducer(state: LinkState, action: LinkAction): LinkState {
         kind: action.devices.length > 0 ? 'nearby' : 'idle',
         discovered: action.devices,
         lastScanAtMs: action.atMs,
-        reason: null,
+        reason: action.devices.length === 0 ? 'No compatible glove found nearby' : null,
       };
 
     case 'scan-failed':

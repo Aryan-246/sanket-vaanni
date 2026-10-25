@@ -19,6 +19,7 @@
  */
 import {
   nativeIsLanguageAvailable,
+  nativeReinitializeSpeech,
   nativeSpeak,
   nativeSpeechReady,
   nativeStopSpeaking,
@@ -50,20 +51,37 @@ export class DeviceSpeaker implements Speaker {
       return;
     }
 
-    void nativeSpeechReady()
-      .then((ready) => {
-        this.readiness = ready ? 'ready' : 'unavailable';
-        this.reason = ready
-          ? null
-          : 'This device has no text-to-speech engine, or its engine failed to start.';
-        this.notify();
-      })
-      .catch((error: unknown) => {
-        this.readiness = 'unavailable';
-        this.reason = error instanceof Error ? error.message : 'Speech engine check failed.';
-        this.notify();
-      });
+    void this.probe(false);
   }
+
+  probe = async (forceReinit: boolean = false): Promise<boolean> => {
+    if (!isNativeModuleAvailable) {
+      this.readiness = 'unavailable';
+      this.reason =
+        nativeModuleUnavailableReason ?? 'On-device speech is not available in this build.';
+      this.notify();
+      return false;
+    }
+
+    this.readiness = 'probing';
+    this.notify();
+    try {
+      const ready = forceReinit
+        ? await nativeReinitializeSpeech()
+        : await nativeSpeechReady();
+      this.readiness = ready ? 'ready' : 'unavailable';
+      this.reason = ready
+        ? null
+        : 'This device has no text-to-speech engine, or its engine failed to start.';
+      this.notify();
+      return ready;
+    } catch (error: unknown) {
+      this.readiness = 'unavailable';
+      this.reason = error instanceof Error ? error.message : 'Speech engine check failed.';
+      this.notify();
+      return false;
+    }
+  };
 
   private notify(): void {
     for (const listener of this.listeners) listener();
@@ -91,12 +109,14 @@ export class DeviceSpeaker implements Speaker {
 
   async speak(text: string, options?: SpeechOptions): Promise<void> {
     if (this.readiness === 'probing') {
-      // Not a failure of the text — a failure of timing. Saying so is what lets
-      // the caller offer a retry rather than a fix.
-      throw new Error('The speech engine is still starting. Try again in a moment.');
+      // Allow up to a brief probe cycle to complete
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 500));
     }
     if (this.readiness !== 'ready') {
-      throw new Error(this.reason ?? 'Speech is not available on this device.');
+      const recovered = await this.probe(false);
+      if (!recovered) {
+        throw new Error(this.reason ?? 'Speech is not available on this device.');
+      }
     }
 
     await nativeSpeak(text, {

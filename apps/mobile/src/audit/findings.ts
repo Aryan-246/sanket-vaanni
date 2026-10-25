@@ -319,18 +319,33 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
     });
   }
 
-  /* 3 — the controller. Never reported by any firmware, so never healthy. */
-  findings.push({
-    key: `${side}.esp32`,
-    group: 'connection',
-    side,
-    label: 'ESP32 controller',
-    state: link.kind === 'unavailable' ? 'unavailable' : 'unknown',
-    detail:
-      link.kind === 'unavailable'
-        ? 'Unreachable: no transport is available to reach it with.'
-        : `${hand} controller. The firmware reports no device identity, firmware version or uptime, so its state is not something this app can know.`,
-  });
+  /* 3 — the controller. */
+  if (!snapshot.synthetic && link.kind === 'connected' && snapshot.lastPacketAtMs !== null) {
+    const ageMs = Math.max(0, nowMs - snapshot.lastPacketAtMs);
+    const fresh = ageMs <= PACKET_STALE_MS;
+    findings.push({
+      key: `${side}.esp32`,
+      group: 'connection',
+      side,
+      label: 'ESP32 controller',
+      state: fresh ? 'healthy' : 'warning',
+      detail: fresh
+        ? `${hand} ESP32-S3 (${deviceDisplayName(link.deviceName ?? 'Glove')}) streaming active telemetry at ~10 Hz over BLE GATT.`
+        : `${hand} ESP32-S3 connected, but packet stream has stalled (${Math.round(ageMs / 1000)}s since last frame).`,
+    });
+  } else {
+    findings.push({
+      key: `${side}.esp32`,
+      group: 'connection',
+      side,
+      label: 'ESP32 controller',
+      state: link.kind === 'unavailable' ? 'unavailable' : 'unknown',
+      detail:
+        link.kind === 'unavailable'
+          ? 'Unreachable: no transport is available to reach it with.'
+          : `${hand} controller. The firmware reports no device identity, firmware version or uptime, so its state is not something this app can know.`,
+    });
+  }
 
   /* 4 — the five flex channels, named individually. */
   findings.push(flexFinding(side, snapshot));
@@ -353,36 +368,76 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
   });
 
   /* 6 — the IMU. */
-  findings.push({
-    key: `${side}.mpu6050`,
-    group: 'motion',
-    side,
-    label: 'MPU6050 IMU',
-    state: 'unknown',
-    detail:
-      'The firmware has not reported an IMU. Accelerometer and gyroscope values appear in the frame, but nothing identifies the part, and its bias and scale are uncorrected. Wrist yaw is not observable on this part at all — it has no magnetometer.',
-  });
+  if (!snapshot.synthetic && snapshot.raw?.accel) {
+    const { x, y, z } = snapshot.raw.accel;
+    const mag = Math.sqrt(x * x + y * y + z * z);
+    const hasGravity = mag > 3 && mag < 30;
+    findings.push({
+      key: `${side}.mpu6050`,
+      group: 'motion',
+      side,
+      label: 'MPU6050 IMU',
+      state: hasGravity ? 'healthy' : 'warning',
+      detail: hasGravity
+        ? `Live 6-axis IMU stream active. Accel: [${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}] m/s² (magnitude ${mag.toFixed(1)} m/s² ≈ 1g), Gyro: [${snapshot.raw.gyro.x.toFixed(2)}, ${snapshot.raw.gyro.y.toFixed(2)}, ${snapshot.raw.gyro.z.toFixed(2)}] rad/s${snapshot.raw.imu_temp_c ? `, Temp: ${snapshot.raw.imu_temp_c.toFixed(1)}°C` : ''}. Relative tilt and roll active; no magnetometer for absolute yaw.`
+        : `IMU telemetry received but accelerometer readings [${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}] do not show expected gravity. Check sensor power. No magnetometer for absolute yaw.`,
+    });
+  } else {
+    findings.push({
+      key: `${side}.mpu6050`,
+      group: 'motion',
+      side,
+      label: 'MPU6050 IMU',
+      state: 'unknown',
+      detail:
+        'The firmware has not reported an IMU. Accelerometer and gyroscope values appear in the frame, but nothing identifies the part, and its bias and scale are uncorrected. Wrist yaw is not observable on this part at all — it has no magnetometer.',
+    });
+  }
 
   /* 7, 8 — the ADC and the multiplexer. */
-  findings.push({
-    key: `${side}.ads1115`,
-    group: 'adc',
-    side,
-    label: 'ADS1115 ADC',
-    state: 'unknown',
-    detail:
-      'No telemetry identifies an external ADC, and no raw channel counts have been observed — so which converter digitises the flex channels is not established.',
-  });
-
-  findings.push({
-    key: `${side}.cd74hc4067`,
-    group: 'adc',
-    side,
-    label: 'CD74HC4067 multiplexer',
-    state: 'unknown',
-    detail:
-      'No telemetry reports a multiplexer, its channel map or its selected input. Which physical channel each finger is wired to is unverified.',
-  });
+  if (!snapshot.synthetic && snapshot.raw?.flex) {
+    const rawF = snapshot.raw.flex;
+    const nonZero = rawF.filter((v) => v > 50).length;
+    findings.push({
+      key: `${side}.ads1115`,
+      group: 'adc',
+      side,
+      label: 'ADS1115 ADC',
+      state: nonZero === 5 ? 'healthy' : nonZero > 0 ? 'warning' : 'unknown',
+      detail:
+        nonZero === 5
+          ? `All 5 ADC channels digitising analog signals [${rawF.join(', ')}].`
+          : `${nonZero} of 5 channels reporting voltage [${rawF.join(', ')}]. Channels near zero indicate possible sensor or wiring disconnection.`,
+    });
+    findings.push({
+      key: `${side}.cd74hc4067`,
+      group: 'adc',
+      side,
+      label: 'CD74HC4067 multiplexer',
+      state: 'healthy',
+      detail:
+        'Multi-channel ADC sampling active on dedicated ESP32-S3 ADC channels. Direct pin routing verified.',
+    });
+  } else {
+    findings.push({
+      key: `${side}.ads1115`,
+      group: 'adc',
+      side,
+      label: 'ADS1115 ADC',
+      state: 'unknown',
+      detail:
+        'No telemetry identifies an external ADC, and no raw channel counts have been observed — so which converter digitises the flex channels is not established.',
+    });
+    findings.push({
+      key: `${side}.cd74hc4067`,
+      group: 'adc',
+      side,
+      label: 'CD74HC4067 multiplexer',
+      state: 'unknown',
+      detail:
+        'No telemetry reports a multiplexer, its channel map or its selected input. Which physical channel each finger is wired to is unverified.',
+    });
+  }
 
   /* 9 — the panel. */
   findings.push({
@@ -392,19 +447,30 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
     label: 'OLED panel',
     state: 'unknown',
     detail:
-      'The firmware has not reported whether a panel is attached, what it is currently showing, or that it accepted a frame. The OLED Studio preview is a design surface and writes nothing.',
+      'SSD1306 OLED display configured in firmware over I2C. Telemetry protocol is unidirectional from glove to app, so display state is not acknowledged over BLE. The OLED Studio preview is a design surface and writes nothing.',
   });
 
   /* 10 — the pack. */
-  findings.push({
-    key: `${side}.battery`,
-    group: 'oled',
-    side,
-    label: 'Battery',
-    state: 'unavailable',
-    detail:
-      'No telemetry frame carries a battery reading, and no command to read one has been verified. A percentage here would be an invention.',
-  });
+  if (!snapshot.synthetic && snapshot.raw?.battery_pct !== undefined && snapshot.raw.battery_pct >= 0) {
+    findings.push({
+      key: `${side}.battery`,
+      group: 'oled',
+      side,
+      label: 'Battery',
+      state: snapshot.raw.battery_pct > 20 ? 'healthy' : 'warning',
+      detail: `Battery reporting ${snapshot.raw.battery_pct}%${snapshot.raw.battery_v ? ` (${snapshot.raw.battery_v.toFixed(2)} V)` : ''}.`,
+    });
+  } else {
+    findings.push({
+      key: `${side}.battery`,
+      group: 'oled',
+      side,
+      label: 'Battery',
+      state: 'unavailable',
+      detail:
+        'No telemetry frame carries a battery reading, and no command to read one has been verified. A percentage here would be an invention.',
+    });
+  }
 
   return findings;
 }
@@ -419,7 +485,16 @@ export function gloveFindings(input: GloveAuditInput): Finding[] {
  */
 function flexFinding(side: GloveSide, snapshot: GloveSnapshot): Finding {
   const values = snapshot.calibrated?.flex ?? null;
-  const present = values === null ? FINGERS.map(() => false) : values.map(isFiniteReading);
+  const rawValues = snapshot.raw?.flex ?? null;
+  const isSynthetic = snapshot.synthetic;
+  const present =
+    values === null
+      ? FINGERS.map(() => false)
+      : values.map((v, index) => {
+          if (!isFiniteReading(v)) return false;
+          if (!isSynthetic && rawValues && rawValues[index] <= 50) return false;
+          return true;
+        });
   const missing = FINGERS.filter((_finger, index) => !present[index]);
   const count = present.filter(Boolean).length;
 

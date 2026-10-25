@@ -151,7 +151,7 @@ const makeStyles = (palette: Palette) =>
       transform: [{ scale: 0.985 }],
     },
     disabled: {
-      opacity: 0.4,
+      opacity: 0.65,
     },
     label: {
       textAlign: 'center',

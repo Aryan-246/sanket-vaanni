@@ -63,6 +63,7 @@ export function GloveConnectionBar({
   const { palette } = useTheme();
 
   const bothConnected = SIDES.every((side) => gloves[side].link.kind === 'connected');
+  const anyNearby = SIDES.some((side) => gloves[side].link.kind === 'nearby');
 
   return (
     <Card testID={testID} style={styles.card}>
@@ -88,15 +89,15 @@ export function GloveConnectionBar({
       </View>
 
       <ActionButton
-        label={bothConnected ? 'Both gloves connected' : 'Connect both'}
+        label={bothConnected ? 'Both gloves connected' : anyNearby ? 'Connect both' : 'Find gloves'}
         tone={bothConnected ? 'ghost' : 'primary'}
-        icon={bothConnected ? 'check' : 'link'}
+        icon={bothConnected ? 'check' : anyNearby ? 'link' : 'scan'}
         busy={connectingBoth}
         disabled={bothConnected}
         compact
         onPress={onConnectBoth}
-        accessibilityLabel="Connect both gloves"
-        accessibilityHint="Scans for a left and a right glove and connects to the first device each finds"
+        accessibilityLabel={bothConnected ? 'Both gloves connected' : anyNearby ? 'Connect both gloves' : 'Find gloves'}
+        accessibilityHint="Scans for nearby compatible left and right gloves and connects"
       />
     </Card>
   );
@@ -265,17 +266,30 @@ function CellAction({
     case 'disconnected':
       return (
         <ActionButton
-          label="Find"
+          label="Retry"
           tone="secondary"
           compact
           onPress={() => {
             void actions.retry();
           }}
-          accessibilityLabel={`Find the ${label} glove again`}
+          accessibilityLabel={`Retry finding or connecting the ${label} glove`}
         />
       );
 
     default:
+      if (link.reason) {
+        return (
+          <ActionButton
+            label="Retry"
+            tone="secondary"
+            compact
+            onPress={() => {
+              void actions.scan();
+            }}
+            accessibilityLabel={`Retry finding the ${label} glove`}
+          />
+        );
+      }
       return (
         <ActionButton
           label="Find"
@@ -324,9 +338,10 @@ function stateWord(snapshot: GloveSnapshot): string {
     case 'connecting':
       return 'Connecting…';
     case 'connected':
-      return isSimulatedLink(link)
-        ? 'Simulated stream'
-        : (link.deviceName === null ? 'Connected' : deviceDisplayName(link.deviceName));
+      if (isSimulatedLink(link)) {
+        return 'Simulated stream';
+      }
+      return snapshot.receivingData ? 'Receiving data' : 'Connected to app';
     case 'unavailable':
       return 'Protocol unverified';
     case 'error':
@@ -334,7 +349,7 @@ function stateWord(snapshot: GloveSnapshot): string {
     case 'disconnected':
       return 'Disconnected';
     default:
-      return 'Not connected';
+      return link.reason ?? 'Not connected';
   }
 }
 

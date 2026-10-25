@@ -165,6 +165,13 @@ export function DatasetArea(): React.JSX.Element {
             icon="scan"
             title="No signs defined for this language"
             body="A window cannot be filed without a name, and this is where the names are made."
+            action={
+              <ActionButton
+                label="Load 5 Starter Words (ASL)"
+                tone="primary"
+                onPress={() => { void ml.store.ensureCanonicalLabels(data.languageId); }}
+              />
+            }
           />
         ) : (
           <Card style={styles.stack}>

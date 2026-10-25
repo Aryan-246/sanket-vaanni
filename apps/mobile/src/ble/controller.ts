@@ -37,7 +37,11 @@ import type {
   Unsubscribe,
 } from './types';
 import type { DataSource } from '../audit/status';
-import { createDemoCalibration, type CalibrationProfile } from '../sensors/calibration';
+import {
+  CalibrationError,
+  createDemoCalibration,
+  type CalibrationProfile,
+} from '../sensors/calibration';
 import { createProcessingPipeline } from '../sensors/processing';
 import type { RawSample, SensorSample } from '../sensors/types';
 
@@ -69,6 +73,8 @@ export interface GloveSnapshot {
   readonly synthetic: boolean;
   /** False while the transport reports it cannot operate at all. */
   readonly available: boolean;
+  /** True only when valid, fresh frames are actively arriving from this glove. */
+  readonly receivingData?: boolean;
 }
 
 export interface GloveControllerOptions {
@@ -92,8 +98,8 @@ export class GloveController {
   readonly side: GloveSide;
 
   readonly #transport: GloveTransport;
-  readonly #calibration: CalibrationProfile;
-  readonly #pipeline: ReturnType<typeof createProcessingPipeline>;
+  #calibration: CalibrationProfile;
+  #pipeline: ReturnType<typeof createProcessingPipeline>;
   readonly #now: () => number;
   readonly #minEmitIntervalMs: number;
 
@@ -107,6 +113,7 @@ export class GloveController {
   #listeners = new Set<GloveListener>();
   #statusUnsub: Unsubscribe | null = null;
   #sampleUnsub: Unsubscribe | null = null;
+  #staleTimer: ReturnType<typeof setTimeout> | null = null;
   #disposed = false;
   #paused = false;
   readonly #frameListeners = new Set<FrameListener>();
@@ -128,7 +135,24 @@ export class GloveController {
     this.#sampleUnsub = transport.subscribe(this.#handleSample);
   }
 
+  getCalibration(): CalibrationProfile {
+    return this.#calibration;
+  }
+
+  setCalibration(calibration: CalibrationProfile): void {
+    if (calibration.side !== this.side) {
+      throw new CalibrationError(
+        `Calibration is for the ${calibration.side} glove but the controller is for the ${this.side} glove`,
+      );
+    }
+    this.#calibration = calibration;
+    this.#pipeline = createProcessingPipeline(calibration);
+  }
+
   getSnapshot(): GloveSnapshot {
+    if (this.#snapshot.receivingData && !this.isPacketFresh()) {
+      this.#snapshot = this.#buildSnapshot();
+    }
     return this.#snapshot;
   }
 
@@ -201,6 +225,10 @@ export class GloveController {
 
   async disconnect(): Promise<void> {
     if (this.#disposed) return;
+    if (this.#staleTimer) {
+      clearTimeout(this.#staleTimer);
+      this.#staleTimer = null;
+    }
     try {
       await this.#transport.disconnect();
     } catch (error) {
@@ -277,6 +305,11 @@ export class GloveController {
     if (this.#disposed) return;
     this.#disposed = true;
 
+    if (this.#staleTimer) {
+      clearTimeout(this.#staleTimer);
+      this.#staleTimer = null;
+    }
+
     this.#statusUnsub?.();
     this.#sampleUnsub?.();
     this.#statusUnsub = null;
@@ -307,7 +340,7 @@ export class GloveController {
       // Preserve the device id learned during connect; the transport reports
       // only a display name.
       this.#link = { ...this.#link, ...next, discovered: this.#link.discovered };
-    } else if (status.kind === 'disconnected') {
+    } else if (status.kind === 'disconnected' || status.kind === 'idle') {
       this.#raw = null;
       this.#calibrated = null;
       this.#packetCount = 0;
@@ -332,6 +365,13 @@ export class GloveController {
     this.#calibrated = this.#pipeline.process(raw);
     this.#packetCount += 1;
     this.#lastPacketAtMs = this.#now();
+
+    if (this.#staleTimer) clearTimeout(this.#staleTimer);
+    this.#staleTimer = setTimeout(() => {
+      if (!this.#disposed && this.#link.kind === 'connected' && !this.isPacketFresh()) {
+        this.#emit(true);
+      }
+    }, PACKET_STALE_MS + 50);
 
     /*
      * Every frame goes to the frame listeners, before the throttle below. A
@@ -395,6 +435,9 @@ export class GloveController {
       source = isSimulatedLink(this.#link) || this.#transport.isSynthetic ? 'simulated' : 'real';
     }
 
+    const isFresh = this.#lastPacketAtMs !== null && this.#now() - this.#lastPacketAtMs <= PACKET_STALE_MS;
+    const receivingData = live && isFresh && this.#calibrated !== null;
+
     return {
       side: this.side,
       link: this.#link,
@@ -407,6 +450,7 @@ export class GloveController {
       transportName: this.#transport.name,
       synthetic: this.#transport.isSynthetic,
       available: this.#link.kind !== 'unavailable',
+      receivingData,
     };
   }
 }

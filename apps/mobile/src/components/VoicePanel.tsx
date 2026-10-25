@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { ActionButton } from './ActionButton';
 import { AppText } from './AppText';
 import { Badge } from './Badge';
 import { Card } from './Card';
@@ -22,14 +23,10 @@ export interface VoicePanelProps {
   phrase: string | null;
   /**
    * True while the device is genuinely producing audio.
-   *
-   * The panel does not offer a play button — a switch is the right control for a
-   * mode that stays on, and a play button beside a switch invites the reading
-   * that the switch does nothing. What it does instead is *report* the state the
-   * switch produces: while the toggle is on and the phone is talking, the badge
-   * says so.
    */
   speaking?: boolean;
+  /** Independent test voice utterance action to verify TTS output before recognition. */
+  onTestVoice?: () => void;
   /**
    * Draw the panel's own "Voice" heading. Set false when the caller already
    * renders a `SectionHeader` for this section, so the word is not printed
@@ -51,6 +48,7 @@ export function VoicePanel({
   unavailableReason,
   phrase,
   speaking = false,
+  onTestVoice,
   showTitle = true,
   testID,
 }: VoicePanelProps): React.JSX.Element {
@@ -126,6 +124,20 @@ export function VoicePanel({
           {phrase ?? 'Nothing yet'}
         </AppText>
       </View>
+
+      {onTestVoice && (
+        <View style={styles.testVoiceRow}>
+          <ActionButton
+            label="Test voice output"
+            tone="secondary"
+            compact
+            icon="volume"
+            onPress={onTestVoice}
+            disabled={speaking}
+            accessibilityLabel="Test device text-to-speech engine"
+          />
+        </View>
+      )}
 
       {/*
         Not a Toggle. A switch that is permanently off, or that flips to on and
@@ -226,5 +238,9 @@ const makeStyles = (palette: Palette) =>
     rowValue: {
       flexShrink: 1,
       textAlign: 'right',
+    },
+    testVoiceRow: {
+      paddingTop: spacing.sm,
+      alignItems: 'flex-start',
     },
   });

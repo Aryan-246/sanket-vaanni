@@ -23,12 +23,44 @@ export const SERVICE_UUID   = '8f2a1000-7d2b-4c9a-9c4e-6b1e2f000001';
 export const DATA_UUID      = '8f2a1001-7d2b-4c9a-9c4e-6b1e2f000001';
 export const CONTROL_UUID   = '8f2a1002-7d2b-4c9a-9c4e-6b1e2f000001';
 
-const GLOVE_NAMES: Record<string, GloveSide> = {
-  'SanketVaanni-Left':  'left',
-  'SanketVaanni-Right': 'right',
-};
-
 const SCAN_TIMEOUT_MS = 8000;
+
+/**
+ * Validates whether an advertised BLE device is a compatible Sanket Vaanni glove.
+ * Identifies compatible gloves using:
+ * 1. Verified primary or scan-response SERVICE_UUID matching SERVICE_UUID.
+ * 2. Legitimate device name variations (e.g. SanketVaanni-Left, SanketVaanni-Right,
+ *    SanketVaanni, SV-Left, SV-Right, Sanket-Vaanni).
+ * Arbitrary unrelated Bluetooth devices (headphones, TVs, laptops) are strictly rejected.
+ */
+export function isCompatibleGloveDevice(
+  name: string | null | undefined,
+  serviceUUIDs: string[] | null | undefined,
+): boolean {
+  if (serviceUUIDs && serviceUUIDs.some((uuid) => uuid.toLowerCase() === SERVICE_UUID.toLowerCase())) {
+    return true;
+  }
+  if (name) {
+    const trimmed = name.trim();
+    if (/^(sanket[\s_-]?vaanni|sv[-_])/i.test(trimmed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Extracts glove side if explicitly declared in the advertised name.
+ * If the advertised name does not state left or right, returns null so the side
+ * can be verified by reading the hardware protocol payload on connection.
+ */
+export function inferSideFromDevice(name: string | null | undefined): GloveSide | null {
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  if (lower.includes('left')) return 'left';
+  if (lower.includes('right')) return 'right';
+  return null;
+}
 
 /** Surfaced in the UI and tests so the reason is visible. */
 export const BLE_UNAVAILABLE_REASON =
@@ -124,7 +156,6 @@ interface ScanSubscriber {
 
 const _scanSubscribers = new Set<ScanSubscriber>();
 let _scanTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-const _cachedDiscovered = new Map<string, DiscoveredGlove>();
 
 function startOrJoinSharedScan(
   manager: BleManager,
@@ -135,17 +166,7 @@ function startOrJoinSharedScan(
   const sub: ScanSubscriber = { side, onFound, onError };
   _scanSubscribers.add(sub);
 
-  // If already discovered in recent cache, deliver immediately
-  for (const g of _cachedDiscovered.values()) {
-    if (g.side === side) {
-      onFound(g);
-      _scanSubscribers.delete(sub);
-      return () => {};
-    }
-  }
-
   if (_scanSubscribers.size === 1) {
-    _cachedDiscovered.clear();
     _scanTimeoutTimer = setTimeout(() => {
       try { manager.stopDeviceScan(); } catch {}
       _scanSubscribers.clear();
@@ -160,22 +181,22 @@ function startOrJoinSharedScan(
         return;
       }
       if (!device) return;
-      const rawName = device.name ?? device.localName ?? 'unnamed';
-      console.log(`[BLE Raw Scan Device] id=${device.id} name=${rawName}`);
-      const trimmed = rawName.trim();
-      let detectedSide: GloveSide | undefined = GLOVE_NAMES[trimmed];
-      if (!detectedSide) {
-        if (trimmed.toLowerCase().includes('left')) detectedSide = 'left';
-        else if (trimmed.toLowerCase().includes('right')) detectedSide = 'right';
+      const rawName = device.name ?? device.localName ?? '';
+      const isCompat = isCompatibleGloveDevice(rawName, device.serviceUUIDs);
+      if (!isCompat) {
+        return;
       }
-      if (!detectedSide) return;
-
-      const glove: DiscoveredGlove = { id: device.id, name: rawName, side: detectedSide, rssi: device.rssi ?? null };
-      _cachedDiscovered.set(device.id, glove);
-      console.log(`[BLE Shared Scan Discovered] ${rawName} (${detectedSide}) id=${device.id}`);
+      console.log(`[BLE Compatible Device Discovered] id=${device.id} name=${rawName}`);
+      const inferredSide = inferSideFromDevice(rawName);
 
       for (const s of [..._scanSubscribers]) {
-        if (s.side === detectedSide) {
+        if (inferredSide === null || inferredSide === s.side) {
+          const glove: DiscoveredGlove = {
+            id: device.id,
+            name: rawName || `Sanket Vaanni (${s.side})`,
+            side: inferredSide ?? s.side,
+            rssi: device.rssi ?? null,
+          };
           s.onFound(glove);
           _scanSubscribers.delete(s);
         }
@@ -257,17 +278,17 @@ export class BleTransport implements GloveTransport {
     const ok = await ensureBluetoothPermissions();
     if (!ok) {
       this.#setStatus({ kind: 'error', message: 'Bluetooth permission denied' });
-      return [];
+      throw new Error('Bluetooth permission denied');
     }
     const ready = await this.#waitForBleReady();
     if (!ready) {
       this.#setStatus({ kind: 'error', message: 'Bluetooth is off or unavailable' });
-      return [];
+      throw new Error('Bluetooth is off or unavailable');
     }
 
     this.#setStatus({ kind: 'scanning' });
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const results: DiscoveredGlove[] = [];
       const cancel = startOrJoinSharedScan(
         this.#manager!,
@@ -278,16 +299,16 @@ export class BleTransport implements GloveTransport {
         },
         (errMsg) => {
           this.#setStatus({ kind: 'error', message: errMsg });
-          resolve([]);
+          reject(new Error(errMsg));
         },
       );
 
       setTimeout(() => {
         cancel();
         if (results.length === 0) {
-          const cached = [..._cachedDiscovered.values()].filter((g) => g.side === this.#targetSide);
-          if (cached.length === 0) this.#setStatus({ kind: 'idle' });
-          resolve(cached);
+          // Genuinely no devices discovered nearby. Never substitute cached/fake devices.
+          this.#setStatus({ kind: 'idle' });
+          resolve([]);
         }
       }, SCAN_TIMEOUT_MS);
     });
@@ -308,11 +329,39 @@ export class BleTransport implements GloveTransport {
       const device = await this.#manager.connectToDevice(deviceId, { requestMTU: 247, autoConnect: false });
       await device.discoverAllServicesAndCharacteristics();
 
+      // 1. Verify required GATT Service
       const services = await device.services();
       const hasService = services.some((s) => s.uuid.toLowerCase() === SERVICE_UUID.toLowerCase());
       if (!hasService) {
         await device.cancelConnection();
         throw new Error(`Device does not expose service ${SERVICE_UUID}`);
+      }
+
+      // 2. Verify required GATT Characteristics
+      const characteristics = await device.characteristicsForService(SERVICE_UUID);
+      const hasData = characteristics.some((c) => c.uuid.toLowerCase() === DATA_UUID.toLowerCase());
+      const hasControl = characteristics.some((c) => c.uuid.toLowerCase() === CONTROL_UUID.toLowerCase());
+      if (!hasData || !hasControl) {
+        await device.cancelConnection();
+        throw new Error('Device is missing required DATA or CONTROL characteristics');
+      }
+
+      // 3. Verify protocol handshake / initial payload
+      try {
+        const initialChar = await device.readCharacteristicForService(SERVICE_UUID, DATA_UUID);
+        if (initialChar?.value) {
+          const raw = Buffer.from(initialChar.value, 'base64').toString('utf-8');
+          const payload = parseFirmwarePayload(raw);
+          if (payload && payload.glove !== this.#targetSide) {
+            await device.cancelConnection();
+            throw new Error(`Glove side mismatch: device reports '${payload.glove}', expected '${this.#targetSide}'`);
+          }
+        }
+      } catch (readErr) {
+        if (readErr instanceof Error && readErr.message.includes('Glove side mismatch')) {
+          throw readErr;
+        }
+        console.warn('[BLE] Initial handshake read warning:', readErr);
       }
 
       this.#device = device;

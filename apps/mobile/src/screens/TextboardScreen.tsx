@@ -135,7 +135,7 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
   const hasAnything = captionsState.lines.length > 0 || captionsState.interim.length > 0;
 
   return (
-    <Screen scroll={false} bottomInset={layout.tabBarHeight} testID="textboard-screen">
+    <Screen scroll bottomInset={layout.tabBarHeight + spacing.xl} testID="textboard-screen">
       <BrandHeader title="Textboard" onPressAvatar={onOpenAccount} />
 
       {/* ------------------------------------------------------- the floor */}
@@ -162,17 +162,10 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
       />
 
       <View style={styles.floor}>
-        {/*
-          One scroll view serves both states. The floor is `flex: 1` inside a
-          screen that does not scroll, so its height is whatever room the
-          controls below leave over — and on a short screen that is less than
-          the empty state needs. With the empty state sitting outside a scroll
-          view its text overflowed the floor and collided with the "Speak"
-          heading underneath. It scrolls here instead.
-        */}
         <ScrollView
           ref={scrollRef}
           style={styles.transcript}
+          nestedScrollEnabled
           contentContainerStyle={hasAnything ? styles.transcriptContent : styles.emptyContent}
           /*
            * Only follow the conversation when there is one. This fires for the
@@ -326,6 +319,7 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
           placeholderTextColor={palette.textMuted}
           style={[styles.input, { color: palette.textPrimary, borderColor: palette.border }]}
           multiline
+          scrollEnabled
           maxLength={500}
           accessibilityLabel="Message to add to the conversation"
           onSubmitEditing={sendDraft}
@@ -415,8 +409,8 @@ const makeStyles = (palette: Palette) =>
      * someone reaches for mid-conversation.
      */
     floor: {
-      flex: 1,
-      minHeight: 120,
+      height: 240,
+      minHeight: 160,
       marginBottom: spacing.md,
     },
     transcript: {

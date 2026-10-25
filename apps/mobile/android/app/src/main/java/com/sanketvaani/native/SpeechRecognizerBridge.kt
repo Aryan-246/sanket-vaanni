@@ -177,6 +177,14 @@ class SpeechRecognizerBridge(private val context: Context) {
           }
 
           override fun onError(errorCode: Int) {
+            if (preferOffline && (errorCode == 12 || errorCode == 13 || errorCode == 14)) {
+              // Graceful online fallback: offline model is not installed on this device,
+              // automatically retry with online recognition once.
+              main.post {
+                start(languageTag, preferOffline = false, onResult)
+              }
+              return
+            }
             synchronized(lock) {
               isListening = false
               // A partial that never became final is still worth keeping: the
@@ -302,6 +310,9 @@ class SpeechRecognizerBridge(private val context: Context) {
         "The recogniser is busy with another request. Try again in a moment."
       SpeechRecognizer.ERROR_SERVER -> "The recogniser's service reported an error."
       SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech was heard."
+      12 -> "This language is not supported for speech recognition on this device."
+      13 -> "Offline speech model is not installed. Download voice data in device settings or connect to the internet."
+      14 -> "Cannot check speech recognition language support on this device."
       else -> "The recogniser reported an unspecified error (code $code)."
     }
 }

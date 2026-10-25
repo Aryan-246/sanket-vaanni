@@ -83,12 +83,38 @@ export interface PoseSmoothing {
 export interface NeutralPose {
   readonly fingers: FlexReading;
   readonly wrist: WristOrientation;
+  readonly pitchSign?: 1 | -1;
+  readonly rollSign?: 1 | -1;
 }
 
 export const RESTING_POSE: NeutralPose = {
   fingers: [0, 0, 0, 0, 0],
   wrist: { pitch: 0, roll: 0, yaw: null },
+  pitchSign: 1,
+  rollSign: 1,
 };
+
+/**
+ * Default neutral pose for each glove calibrated against observed hardware resting baseline.
+ */
+export function createDefaultNeutralPose(side: GloveSide): NeutralPose {
+  if (side === 'left') {
+    // Left glove MPU6050 inverted on dorsal strap (AccZ negative ~ -15500, roll ~ -164 deg / -2.86 rad)
+    return {
+      fingers: [0, 0, 0, 0, 0],
+      wrist: { pitch: -0.02, roll: -2.86, yaw: null },
+      pitchSign: 1,
+      rollSign: 1,
+    };
+  }
+  // Right glove MPU6050 normal on dorsal strap (AccZ positive ~ +17200, roll ~ +11.8 deg / +0.20 rad)
+  return {
+    fingers: [0, 0, 0, 0, 0],
+    wrist: { pitch: 0.04, roll: 0.20, yaw: null },
+    pitchSign: 1,
+    rollSign: 1,
+  };
+}
 
 export const DEFAULT_SMOOTHING: PoseSmoothing = { alpha: 0.28 };
 
@@ -126,6 +152,17 @@ export function tiltFromAccelerometer(accel: {
   const pitch = Math.atan2(-x, Math.sqrt(y * y + z * z));
   const roll = Math.atan2(y, z);
   return { pitch, roll };
+}
+
+/**
+ * Normalizes an angular difference to the range [-pi, pi].
+ * Prevents discontinuity/jumps when subtracting angles near the +/-pi boundary.
+ */
+export function normalizeAngleDifference(angle: number, reference: number): number {
+  let diff = angle - reference;
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  return diff;
 }
 
 export interface PoseMapper {
@@ -171,17 +208,15 @@ export function createPoseMapper(
       }
 
       const tilt = tiltFromAccelerometer(sample.accel);
+      const pitchSign = neutral.pitchSign ?? 1;
+      const rollSign = neutral.rollSign ?? 1;
 
       return {
         side,
         fingers: state,
         wrist: {
-          // The neutral wrist offset is subtracted only when a neutral pose has
-          // actually been captured. `RESTING_POSE` is all zeros, so this is a
-          // no-op until real calibration exists — and it stays a no-op rather
-          // than pretending zero is a calibrated zero.
-          pitch: tilt.pitch - (neutral.wrist.pitch ?? 0),
-          roll: tilt.roll - (neutral.wrist.roll ?? 0),
+          pitch: pitchSign * (tilt.pitch - (neutral.wrist.pitch ?? 0)),
+          roll: rollSign * normalizeAngleDifference(tilt.roll, neutral.wrist.roll ?? 0),
           yaw: null,
         },
         source,

@@ -63,24 +63,90 @@ export interface SignLanguageProfile {
  *
  * Presence here is a statement of intent, not of capability.
  */
+export const ASL_STARTER_VOCABULARY: readonly VocabularyEntry[] = [
+  {
+    signId: 'asl-hello',
+    label: 'HELLO',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'asl-bye',
+    label: 'BYE',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'asl-thank-you',
+    label: 'THANK YOU',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'asl-yes',
+    label: 'YES',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'asl-no',
+    label: 'NO',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'asl-rest',
+    label: 'REST',
+    requirement: { kind: 'single', side: 'either' },
+  },
+];
+
+export const ISL_STARTER_VOCABULARY: readonly VocabularyEntry[] = [
+  {
+    signId: 'isl-hello',
+    label: 'नमस्ते / HELLO',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'isl-bye',
+    label: 'अलविदा / BYE',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'isl-thank-you',
+    label: 'धन्यवाद / THANK YOU',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'isl-yes',
+    label: 'हाँ / YES',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'isl-no',
+    label: 'नहीं / NO',
+    requirement: { kind: 'single', side: 'either' },
+  },
+  {
+    signId: 'isl-rest',
+    label: 'विश्राम / REST',
+    requirement: { kind: 'single', side: 'either' },
+  },
+];
+
 export const SIGN_LANGUAGE_PROFILES: readonly SignLanguageProfile[] = [
   {
     id: 'isl',
     name: 'Indian Sign Language',
     nativeName: 'भारतीय सांकेतिक भाषा',
     languageCode: null,
-    status: 'planned',
-    vocabularySize: 0,
-    vocabulary: [],
+    status: 'in-progress',
+    vocabularySize: ISL_STARTER_VOCABULARY.length,
+    vocabulary: ISL_STARTER_VOCABULARY,
   },
   {
     id: 'asl',
     name: 'American Sign Language',
     nativeName: null,
     languageCode: 'ase',
-    status: 'planned',
-    vocabularySize: 0,
-    vocabulary: [],
+    status: 'in-progress',
+    vocabularySize: ASL_STARTER_VOCABULARY.length,
+    vocabulary: ASL_STARTER_VOCABULARY,
   },
   {
     id: 'bsl',

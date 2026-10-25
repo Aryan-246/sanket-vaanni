@@ -56,13 +56,17 @@ describe('UnimplementedRecogniser', () => {
 });
 
 describe('sign language profiles', () => {
-  it('declares every profile as having zero vocabulary', () => {
-    SIGN_LANGUAGE_PROFILES.forEach((profile) => {
-      expect(profile.vocabularySize).toBe(0);
-    });
+  it('declares defined profiles with their starter vocabulary and planned profiles with zero', () => {
+    const asl = SIGN_LANGUAGE_PROFILES.find((p) => p.id === 'asl');
+    const isl = SIGN_LANGUAGE_PROFILES.find((p) => p.id === 'isl');
+    const bsl = SIGN_LANGUAGE_PROFILES.find((p) => p.id === 'bsl');
+
+    expect(asl?.vocabularySize).toBe(6);
+    expect(isl?.vocabularySize).toBe(6);
+    expect(bsl?.vocabularySize).toBe(0);
   });
 
-  it('declares every profile as planned, not available', () => {
+  it('declares profiles as in-progress or planned, not available', () => {
     SIGN_LANGUAGE_PROFILES.forEach((profile) => {
       expect(profile.status).not.toBe('available');
     });

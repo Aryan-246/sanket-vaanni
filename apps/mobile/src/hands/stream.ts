@@ -35,7 +35,7 @@ export interface PoseStreamOptions {
 export class PoseStream {
   readonly side: GloveSide;
 
-  readonly #mapper: PoseMapper;
+  #mapper: PoseMapper;
   readonly #smoothing: PoseSmoothing;
   #neutral: NeutralPose | null;
   #lastSample: unknown = null;
@@ -104,6 +104,20 @@ export class PoseStream {
       this.#lastFrame = { pose, neutral: this.#neutral, smoothing: this.#smoothing };
     }
     return this.#lastFrame;
+  }
+
+  /**
+   * Sets or updates the neutral orientation and flex reference for this stream.
+   */
+  setNeutral(neutral: NeutralPose): void {
+    this.#neutral = neutral;
+    this.#mapper = createPoseMapper(this.side, {
+      smoothing: this.#smoothing,
+      neutral,
+    });
+    this.#lastSample = null;
+    this.#lastFrame = null;
+    this.#lastFramePose = null;
   }
 
   /**

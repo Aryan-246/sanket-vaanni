@@ -328,7 +328,6 @@ export function RootNavigator({
           `canOpenAdmin` also requires the profile to have finished loading, and
           using it would rip the screen away from an administrator whose profile
           was mid-refresh. The entry point below still requires `canOpenAdmin`,
-          so the screen cannot be reached until the role is actually known.
         */}
         {detail === 'ml' && isAdmin && <MlScreen onClose={closeDetail} />}
         {/*
@@ -364,6 +363,7 @@ export function RootNavigator({
                 onOpenSettings={() => setTab('more')}
                 onOpenAccount={() => setAccountOpen(true)}
                 onOpenTextboard={() => setTab('textboard')}
+                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
               />
             )}
             {tab === 'oled' && <OledScreen />}
@@ -381,14 +381,7 @@ export function RootNavigator({
                 onOpenAudit={() => openDetail('audit')}
                 onOpenProfile={() => openDetail('profile')}
                 onOpenAbout={() => openDetail('about')}
-                // The learning centre deliberately has no entry point here.
-                // It is reached from the administration console, which is the
-                // only place it belongs: everything on it trains, versions or
-                // activates a model, and ordinary users and guests own none of
-                // that. See the `ml` route above for the other half of the gate.
-                // Admin is only reachable when the account actually holds the
-                // role. Passed as undefined otherwise, so the row is not drawn
-                // at all rather than being drawn and refused.
+                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
                 onOpenAdmin={canOpenAdmin ? () => openDetail('admin') : undefined}
                 onOpenAccount={() => setAccountOpen(true)}
                 initialRecoveryMode={recoveryRequested}

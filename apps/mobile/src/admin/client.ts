@@ -534,3 +534,51 @@ export function deleteTeamMember(params: {
     reason: params.reason,
   });
 }
+
+/* ------------------------------------------------------------- models */
+
+export interface ModelPublishResult {
+  ok: true;
+  published: true;
+  languageProfile: string;
+  version: string;
+  publishedAt: string;
+  vocabularySize: number;
+}
+
+export interface ModelRollbackResult {
+  ok: true;
+  rolledBack: true;
+  languageProfile: string;
+  activeVersion: string;
+  previousVersion: string | null;
+}
+
+export function publishModel(params: {
+  reason: string;
+  languageProfile: string;
+  version: string;
+  modelPackage: any;
+}): Promise<AdminResult<ModelPublishResult>> {
+  return call('POST', '/admin/models/publish', params);
+}
+
+export function rollbackModel(params: {
+  reason: string;
+  languageProfile: string;
+}): Promise<AdminResult<ModelRollbackResult>> {
+  return call('POST', '/admin/models/rollback', params);
+}
+
+export function getModelHistory(languageProfile: string): Promise<
+  AdminResult<{
+    ok: boolean;
+    languageProfile: string;
+    active: any;
+    previous: any;
+    history: any[];
+  }>
+> {
+  return call('GET', `/admin/models/history/${encodeURIComponent(languageProfile)}`);
+}
+

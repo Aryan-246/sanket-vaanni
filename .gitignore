@@ -80,6 +80,9 @@ desktop.ini
 *.jpeg
 apps/mobile/screen_*.png
 apps/mobile/screenshot_*.png
+/screen_*.png
+/current_screen*.png
+scratch/
 apps/mobile/android/app/src/main/assets/index.android.bundle
 /package.json
 /package-lock.json

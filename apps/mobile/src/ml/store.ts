@@ -293,6 +293,46 @@ export class MlStore implements CaptureSink {
     return { ok: true, data: archived };
   }
 
+  /**
+   * Provisions the canonical 5 starter vocabulary words for the language if no active signs exist.
+   * HELLO, BYE, THANK YOU, YES, NO.
+   */
+  async ensureCanonicalLabels(languageId: string = this.snapshot.languageId): Promise<readonly LabelDefinition[]> {
+    const starterWords = [
+      { text: 'HELLO', note: 'Standard ASL greeting: open hand at temple or wave' },
+      { text: 'BYE', note: 'Standard ASL farewell: open palm flexing fingers / waving' },
+      { text: 'THANK YOU', note: 'Standard ASL: flat hand touches chin then moves outward' },
+      { text: 'YES', note: 'Standard ASL: fist nodding up and down like a head nod' },
+      { text: 'NO', note: 'Standard ASL: index and middle finger snap down against thumb' },
+      { text: 'REST', note: 'Neutral baseline: relaxed resting hands on lap or table' },
+    ];
+
+    const existing = this.snapshot.labels.filter(
+      (l) => l.languageId === languageId && l.archivedAtMs === null,
+    );
+    const existingTexts = new Set(existing.map((l) => l.text.toUpperCase().trim()));
+
+    const missingWords = starterWords.filter(
+      (w) => !existingTexts.has(w.text.toUpperCase().trim()),
+    );
+    if (missingWords.length === 0) return existing;
+
+    const created: LabelDefinition[] = missingWords.map((word) => ({
+      id: this.newId(),
+      languageId,
+      text: word.text,
+      note: word.note,
+      createdAtMs: this.now(),
+      createdBy: 'user',
+      archivedAtMs: null,
+    }));
+
+    const labels = [...this.snapshot.labels, ...created];
+    await this.storage.setJson(ML_KEYS.labels, labels);
+    this.patch({ labels, error: null });
+    return [...existing, ...created];
+  }
+
   /* -------------------------------------------------------------- samples */
 
   /** How many windows are stored, by state, for the library. */

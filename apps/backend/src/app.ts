@@ -9,6 +9,7 @@ import { createEmailRoutes } from './routes/email.js';
 import { createAdminRoutes } from './routes/admin.js';
 import { createAccountRoutes, type AccountRouteDeps } from './routes/account.js';
 import { createTeamRoutes, type TeamRouteDeps } from './routes/team.js';
+import { createModelRoutes, type ModelRouteDeps } from './routes/models.js';
 import { adminApiAvailability } from './middleware/requireAdmin.js';
 import {
   createMaintenanceGate,
@@ -36,6 +37,7 @@ export function buildApp(
     maintenanceReader?: MaintenanceReader;
     account?: AccountRouteDeps;
     team?: TeamRouteDeps;
+    models?: ModelRouteDeps;
   } = {},
 ): FastifyInstance {
   const isTest = config.nodeEnv === 'test';
@@ -126,6 +128,13 @@ export function buildApp(
    * uses the same `requireAdmin` guard and audit pair.
    */
   app.register(createTeamRoutes(config, deps.team));
+
+  /*
+   * Sign language model distribution and publication: public versioned reads for
+   * all clients (ISL, ASL, BSL) plus strictly audited administrative publication
+   * and rollback.
+   */
+  app.register(createModelRoutes(config, deps.models));
 
   const adminStatus = adminApiAvailability(config);
   if (!isTest) {

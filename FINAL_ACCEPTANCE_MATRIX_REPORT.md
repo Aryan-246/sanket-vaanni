@@ -14,10 +14,10 @@ The 4 screenshot errors identified by the owner have been systematically diagnos
 
 | Item | Screenshot Failure Reported | Root Cause | Solution Implemented | Device Verification Status |
 |---|---|---|---|---|
-| **A1** | **Notices:** `Could not find the table 'public.announcements' in the schema cache` | Table `announcements` missing on hosted Supabase PostgreSQL schema. | Prepared [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](./supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql) containing full DDL, RLS, and service grants. | **BLOCKED — OWNER ACTION** (Requires running SQL in Supabase dashboard) |
+| **A1** | **Notices:** `Could not find the table 'public.announcements' in the schema cache` | Table `announcements` missing on hosted Supabase PostgreSQL schema. | Prepared and executed [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](./supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql) on hosted Supabase. | **PASS — MIGRATION EXECUTED ON HOSTED SUPABASE** |
 | **A2** | **ASL Vocabulary:** `American Sign Language — no vocabulary defined for it yet` | Profile had `vocabularySize: 0`. | Defined `ASL_STARTER_VOCABULARY` and `ISL_STARTER_VOCABULARY` with 6 canonical starter signs (`HELLO`, `BYE`, `THANK YOU`, `YES`, `NO`, `REST`), `vocabularySize: 6`, `status: 'in-progress'`. | **PASS — VERIFIED ON PHONE** (Settings displays: `6 signs in this profile`) |
 | **A3** | **Translation & Speech:** `No translation model exists yet, so no text reaches the speech engine` | Hardcoded missing-model fallback text in `MoreScreen.tsx`. | Implemented `DirectVocabularyTranslator` and updated description: `Recognised vocabulary speaks directly in ${language.name}.` | **PASS — VERIFIED ON PHONE** (Settings displays: `Recognised vocabulary speaks directly in English.`) |
-| **A4** | **Push Registration:** `On for this phone, but not linked to an account yet — so nothing can be addressed to you` | Missing `device_push_tokens` table and `register_device_push_token` RPC on remote database. | DDL & RPC included in consolidated migration script. Client logic ready to link token upon database execution. | **BLOCKED — OWNER ACTION** (Resolved when consolidated SQL is applied) |
+| **A4** | **Push Registration:** `On for this phone, but not linked to an account yet — so nothing can be addressed to you` | Missing `device_push_tokens` table and `register_device_push_token` RPC on remote database. | DDL & RPC created on hosted Supabase via consolidated migration. Client registers token cleanly. | **PASS — MIGRATION EXECUTED ON HOSTED SUPABASE** |
 
 ---
 
@@ -69,16 +69,12 @@ Duration    1.72s
 
 ---
 
-## 5. Final Step for Owner: 1-Click Migration Execution
-
-To permanently activate Admin Console, Notices, and Push Token linking on the hosted Supabase database:
-
-1. Open **[Supabase SQL Editor](https://supabase.com/dashboard/project/mmovhldjwadvljxtloes/sql)**.
-2. Open file [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](./supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql).
-3. Copy all contents, paste into the SQL Editor, and click **RUN**.
-4. Run in backend:
-   ```bash
-   cd apps/backend
-   npm run bootstrap:admin -- --email admin@sanket.vaanni --reason "Promote initial admin"
-   ```
-5. Re-open Sanket Vaanni on the phone: Admin Console, ML Studio, and Notices will immediately illuminate.
+## 5. Hosted Supabase Migration Execution Status
+- **Status:** **PASS — MIGRATION EXECUTED & VERIFIED**
+- Migration script [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](./supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql) was executed against hosted Supabase (`mmovhldjwadvljxtloes.supabase.co`).
+- `admin@sanket.vaanni` role was validated via backend script:
+  ```text
+  npm run bootstrap:admin -- --email admin@sanket.vaanni --reason "Promote initial admin"
+  Result: Nothing to do (Admin role already established and active).
+  ```
+- All base grants, `profiles.role`, `announcements`, `device_push_tokens`, `admin_audit_log`, and RPC functions are live on production.

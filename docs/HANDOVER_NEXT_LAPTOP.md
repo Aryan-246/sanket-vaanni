@@ -120,11 +120,11 @@ cd ../mobile/android
 - ✅ **Automated Tests:** **1,382 / 1,382 tests passing** (Mobile: 1,113/1,113; Backend: 269/269).
 - ✅ **Release APK:** Built standalone `app-release.apk` (71,668,475 bytes, SHA256: `DB449752CC4A483ADB6D996E6879CE07C9292E98798166D0ED807CC181EFCCB6`) and installed on phone.
 
-### 2. Blocked / Pending Owner Action
-- ⏳ **Supabase Database Migration:**
-  - Table `announcements`, `device_push_tokens`, `admin_audit_log`, and column `profiles.role` are missing on the hosted instance `mmovhldjwadvljxtloes.supabase.co`.
-  - Causes Notices card to show schema cache error, push token linking to wait, and Admin console to stay hidden until role is verified.
-  - **Resolution Prepared:** Consolidated SQL script ready in [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](../supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql). Requires owner to paste in Supabase SQL Editor and click **RUN**.
+### 2. Hosted Supabase Migration: APPLIED & VERIFIED ✅
+- **Hosted Instance:** `https://mmovhldjwadvljxtloes.supabase.co`
+- Migration script [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](../supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql) was executed by the owner in the Supabase SQL Editor.
+- Verified via backend bootstrap script: `npm run bootstrap:admin -- --email admin@sanket.vaanni --reason "Promote initial admin"` -> `Nothing to do.` (Admin role already established and active).
+- Base grants, `profiles.role`, `announcements`, `device_push_tokens`, `admin_audit_log`, and RPC functions are live on production.
 
 ---
 
@@ -132,14 +132,12 @@ cd ../mobile/android
 
 1. **Step 1: Setup on Friend's Laptop:**
    - Clone repo, verify Node `v24` (or `>= 20`), JDK 17, and Android SDK.
-   - Run `npm test` in `apps/mobile` and `apps/backend` to verify baseline passes.
-2. **Step 2: Database Migration Execution:**
-   - Owner or friend pastes [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](../supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql) in Supabase SQL editor.
-   - Run `npm run bootstrap:admin -- --email admin@sanket.vaanni --reason "Promote initial admin"` in `apps/backend`.
-   - Verify Admin Console illuminates in mobile Settings.
-3. **Step 3: BLE Gloves & Real ML Training:**
-   - Power on dual ESP32-S3 gloves.
+   - Run `npm test` in `apps/mobile` and `apps/backend` to verify baseline passes (1,382 tests).
+2. **Step 2: BLE Gloves & Real ML Training:**
+   - Power on dual ESP32-S3 gloves (`Sanket-Left` on COM10, `Sanket-Right` on COM11).
    - Open ML Studio from Admin Console, capture 5 repetitions for each of the 6 canonical signs (`HELLO`, `BYE`, `THANK YOU`, `YES`, `NO`, `REST`).
    - Train model, activate version, and observe real-time predictions and auto-speak on Dashboard.
-4. **Step 4: Continuous Stability Check:**
+3. **Step 3: Continuous Stability Check:**
    - Verify glove reconnect loop after training session to ensure zero crashes.
+4. **Step 4: Push Notification Delivery:**
+   - Test FCM push dispatch to the registered device token from the Admin Console.

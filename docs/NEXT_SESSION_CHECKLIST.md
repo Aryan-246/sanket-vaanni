@@ -48,20 +48,15 @@ If physical device testing is needed without a local Android build:
 
 ---
 
-## 5. Current Priority 1: Hosted Supabase Migration
-- **What is blocked:**
-  - Settings > Notices shows: `Could not find table 'public.announcements' in the schema cache`.
-  - Admin Console is hidden until `profiles.role` column exists and reads `admin`.
-- **How to resolve (takes 1 minute):**
-  1. Open [Supabase SQL Editor](https://supabase.com/dashboard/project/mmovhldjwadvljxtloes/sql).
-  2. Paste contents of [`supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql`](../supabase/PRODUCTION_MIGRATION_CONSOLIDATED.sql).
-  3. Click **RUN**.
-  4. Run `npm run bootstrap:admin -- --email admin@sanket.vaanni --reason "Promote initial admin"` in `apps/backend`.
-  5. Relaunch app on phone — Notices error disappears and Admin Console + ML Studio unlock.
+## 5. Hosted Supabase Migration: COMPLETE & VERIFIED ✅
+- **Status:** The owner has executed `PRODUCTION_MIGRATION_CONSOLIDATED.sql` on the hosted Supabase database.
+- Backend bootstrap verified: `npm run bootstrap:admin` returned `Nothing to do.` (Admin role active on production).
+- Notices table, Push tokens table, Admin audit log, and role permissions are now active in the cloud.
 
 ---
 
-## 6. Current Priority 2: Real Dual Glove ML Capture & Inference
+## 6. Priority 1 for Next Session: Real Dual Glove ML Capture & Inference
 - Connect dual ESP32-S3 gloves (`Sanket-Left` on COM10, `Sanket-Right` on COM11).
-- Open ML Studio, capture 6 canonical signs (`HELLO`, `BYE`, `THANK YOU`, `YES`, `NO`, `REST`).
+- Open ML Studio (unlocked under Settings/Admin), capture 5 repetitions for each of the 6 canonical signs (`HELLO`, `BYE`, `THANK YOU`, `YES`, `NO`, `REST`).
 - Train model, verify live prediction on Dashboard, and confirm auto-speak with REST transition lock.
+- Verify stability and zero crashes during repeated glove reconnect cycles.

@@ -1,0 +1,7 @@
+{
+  "validation_accuracy": null,
+  "session_count": 1,
+  "caveats": [
+    "Dataset has only 1 session; held-out evaluation is not statistically meaningful."
+  ]
+}

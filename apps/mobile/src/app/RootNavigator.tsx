@@ -328,8 +328,7 @@ export function RootNavigator({
           `canOpenAdmin` also requires the profile to have finished loading, and
           using it would rip the screen away from an administrator whose profile
           was mid-refresh. The entry point below still requires `canOpenAdmin`,
-        */}
-        {detail === 'ml' && <MlScreen onClose={closeDetail} />}
+        {detail === 'ml' && isAdmin && <MlScreen onClose={closeDetail} />}
         {/*
           Guarded the same way as the learning centre above, and for the same
           reason: this screen reads and changes other people's accounts. The

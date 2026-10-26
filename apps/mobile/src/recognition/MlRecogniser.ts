@@ -12,10 +12,12 @@ import type { MlCentre } from '../ml/centre';
 
 export class MlRecogniser implements Recogniser {
   readonly profileId: string;
+  private readonly profile: SignLanguageProfile;
   private readonly ml: MlCentre;
 
   constructor(profile: SignLanguageProfile, ml: MlCentre) {
     this.profileId = profile.id;
+    this.profile = profile;
     this.ml = ml;
   }
 
@@ -38,11 +40,15 @@ export class MlRecogniser implements Recogniser {
     }
 
     const { label } = outcome;
+    const vocab = this.profile.vocabulary.find((v) => v.signId === label.labelId);
+    const displayText = vocab?.label ?? label.text;
+    console.log(`[MlRecogniser Recognized] ${label.labelId} => "${displayText}" (score: ${label.score.toFixed(3)})`);
+
     return {
       profileId: this.profileId,
       candidate: {
         signId: label.labelId,
-        label: label.text,
+        label: displayText,
         confidence: label.score,
       },
       timestampMs: Date.now(),

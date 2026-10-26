@@ -155,8 +155,6 @@ export function DashboardScreen({
   const orbSignal = useOrbSignal();
   const speech = useSpeechState();
 
-  const detectedText = useMemo(() => outcomeText(outcome), [outcome]);
-
   // --- Embedded ESP32-S3 Models State & Recognition ---
   const leftConnected = left.link.kind === 'connected';
   const leftPred = leftConnected ? left.prediction : null;
@@ -212,62 +210,44 @@ export function DashboardScreen({
     return palette.warning;
   }, [rightConnected, rightPred, palette]);
 
-  // Speech integration for embedded models with REST re-arming lock
-  const lastSpokenEmbeddedRef = useRef<string | null>(null);
-  const embeddedSpeechArmedRef = useRef<boolean>(true);
+  const detectedText = useMemo(() => {
+    const fromMl = outcomeText(outcome);
+    if (fromMl) return fromMl;
+    if (
+      rightPred &&
+      rightPred.status === 'valid' &&
+      rightPred.label &&
+      rightPred.label !== 'UNKNOWN' &&
+      rightPred.label.toUpperCase() !== 'REST'
+    ) {
+      return rightPred.label;
+    }
+    if (
+      leftPred &&
+      leftPred.status === 'valid' &&
+      leftPred.label &&
+      leftPred.label !== 'UNKNOWN' &&
+      leftPred.label.toUpperCase() !== 'REST'
+    ) {
+      return leftPred.label;
+    }
+    return null;
+  }, [outcome, rightPred, leftPred]);
 
   useEffect(() => {
-    let activeLabel: string | null = null;
-    if (rightPred && rightPred.status === 'valid' && rightPred.label && rightPred.label !== 'UNKNOWN') {
-      activeLabel = rightPred.label.toUpperCase();
-    } else if (leftPred && leftPred.status === 'valid' && leftPred.label && leftPred.label !== 'UNKNOWN') {
-      activeLabel = leftPred.label.toUpperCase();
-    }
-
-    if (!activeLabel || activeLabel === 'REST') {
-      embeddedSpeechArmedRef.current = true;
-      if (activeLabel === 'REST') {
-        lastSpokenEmbeddedRef.current = 'REST';
-      }
-      return;
-    }
-
-    if (embeddedSpeechArmedRef.current && activeLabel !== lastSpokenEmbeddedRef.current) {
-      lastSpokenEmbeddedRef.current = activeLabel;
-      embeddedSpeechArmedRef.current = false;
-
-      if (preferences.voiceEnabled && speechController.speak) {
-        const isHindi = preferences.targetLanguageCode === 'hi' || preferences.signProfileId === 'isl';
-        void speechController.speak(activeLabel, {
-          language: isHindi ? 'hi-IN' : 'en-IN',
-        });
-      }
-    }
-  }, [
-    leftPred,
-    rightPred,
-    preferences.voiceEnabled,
-    preferences.targetLanguageCode,
-    preferences.signProfileId,
-    speechController,
-  ]);
-
-  useEffect(() => {
-    if (outcome.kind === 'result' && outcome.candidate && typeof outcome.candidate.label === 'string') {
-      const word = outcome.candidate.label.toUpperCase();
+    if (detectedText) {
+      const upper = detectedText.toUpperCase();
+      const word = upper.includes(' / ') ? upper.split(' / ')[1]! : upper;
       if (word !== 'REST' && word !== lastCelebratedWord.current) {
         lastCelebratedWord.current = word;
         setCelebrating(true);
         const timer = setTimeout(() => setCelebrating(false), 2400);
         return () => clearTimeout(timer);
       }
-    } else if (
-      outcome.kind === 'idle' ||
-      (outcome.kind === 'result' && outcome.candidate?.label?.toUpperCase() === 'REST')
-    ) {
+    } else {
       lastCelebratedWord.current = null;
     }
-  }, [outcome]);
+  }, [detectedText]);
 
   /**
    * Speak what was recognised, when the user has switched speech on.

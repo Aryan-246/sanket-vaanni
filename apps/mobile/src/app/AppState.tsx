@@ -48,6 +48,7 @@ import type { AnnouncementsState } from '../announcements';
 import { PushController } from '../notifications';
 import type { PushState } from '../notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BUNDLED_MODELS } from '../ml/bundled';
 import { apiClient } from '../api/client';
 import { createAsyncStorage, type Storage } from '../storage';
 import { DirectVocabularyTranslator, type Translator } from '../translation';
@@ -551,16 +552,20 @@ export function AppStateProvider({
    * Fetches the globally published model from the backend for the active language profile.
    * If a new version is published and matches the language, auto-imports and activates it
    * for live glove inference on both Normal User and Guest clients.
-   * Caches the package in AsyncStorage for offline resilience.
+   * Falls back to BUNDLED_MODELS with offline resilience.
    */
   useEffect(() => {
     let cancelled = false;
     const syncPublishedModel = async () => {
       try {
+        await ml.start();
+        if (cancelled) return;
+        ml.setLanguage(profile.id);
+
         const cacheKey = `@sanket_vaanni:published_model_${profile.id}`;
         let modelPkgToImport: unknown = null;
 
-        const res = await apiClient.getPublishedModel(profile.id);
+        const res = await apiClient.getPublishedModel(profile.id).catch(() => ({ ok: false as const }));
         if (!cancelled && res.ok && res.data.published && res.data.modelPackage) {
           modelPkgToImport = res.data.modelPackage;
           void AsyncStorage.setItem(cacheKey, JSON.stringify(res.data.modelPackage)).catch(() => undefined);
@@ -575,27 +580,60 @@ export function AppStateProvider({
           }
         }
 
+        if (!modelPkgToImport) {
+          modelPkgToImport = BUNDLED_MODELS[profile.id] ?? null;
+        }
+
         if (cancelled || !modelPkgToImport) return;
 
         const pkg = modelPkgToImport as { contract?: { version?: number; languageId?: string } };
         if (pkg.contract?.languageId !== profile.id) return;
 
+        const targetVersion = pkg.contract?.version ?? 3;
+        const currentActive = ml.getSnapshot().activeModel;
+        const isMatchingActive =
+          currentActive !== null &&
+          currentActive.languageId === profile.id &&
+          currentActive.status === 'active' &&
+          currentActive.importedFrom?.sourceVersion === targetVersion;
+
+        if (isMatchingActive) {
+          console.log(`[PublishedModelSync] Active model is already up to date (version ${targetVersion})`);
+          return;
+        }
+
+        console.log(`[PublishedModelSync] Activating published model v${targetVersion} for ${profile.id}...`);
         const existingModels = ml.store.getSnapshot().models;
-        const alreadyPresent = existingModels.some(
+        const candidate = existingModels.find(
           (m) =>
             m.languageId === profile.id &&
-            (m.importedFrom?.sourceVersion === pkg.contract?.version ||
-              (m.status === 'active' && m.importedFrom?.sourceVersion === pkg.contract?.version)),
+            m.importedFrom?.sourceVersion === targetVersion,
         );
 
-        if (!alreadyPresent) {
+        if (candidate) {
+          console.log(`[PublishedModelSync] Found existing candidate ${candidate.id}, activating...`);
+          await ml.activate(candidate.id);
+        } else {
+          console.log(`[PublishedModelSync] Importing package for ${profile.id}...`);
           const importRes = await ml.store.importModel(modelPkgToImport);
           if (importRes.ok) {
+            console.log(`[PublishedModelSync] Successfully imported, activating: ${importRes.data.summary.id}`);
             await ml.activate(importRes.data.summary.id);
+          } else if (modelPkgToImport !== BUNDLED_MODELS[profile.id] && BUNDLED_MODELS[profile.id]) {
+            console.warn(`[PublishedModelSync] Import of external package failed (${importRes.error}), falling back to bundled...`);
+            const fallbackRes = await ml.store.importModel(BUNDLED_MODELS[profile.id]);
+            if (fallbackRes.ok) {
+              console.log(`[PublishedModelSync] Bundled model imported, activating: ${fallbackRes.data.summary.id}`);
+              await ml.activate(fallbackRes.data.summary.id);
+            } else {
+              console.error(`[PublishedModelSync] Bundled model import failed: ${fallbackRes.error}`);
+            }
+          } else {
+            console.error(`[PublishedModelSync] Model import failed: ${importRes.error}`);
           }
         }
-      } catch {
-        // network or storage failure - silent graceful fallback
+      } catch (err) {
+        console.warn(`[PublishedModelSync] Error syncing model:`, err);
       }
     };
 

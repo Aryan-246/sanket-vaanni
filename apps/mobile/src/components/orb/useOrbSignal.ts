@@ -31,6 +31,24 @@ export function useOrbSignal(): OrbSignal {
   const left = useGlove('left');
   const right = useGlove('right');
 
+  const fromMl = outcomeText(outcome);
+  const rightPredText =
+    right.prediction?.status === 'valid' &&
+    right.prediction.label &&
+    right.prediction.label !== 'UNKNOWN' &&
+    right.prediction.label.toUpperCase() !== 'REST'
+      ? right.prediction.label
+      : null;
+  const leftPredText =
+    left.prediction?.status === 'valid' &&
+    left.prediction.label &&
+    left.prediction.label !== 'UNKNOWN' &&
+    left.prediction.label.toUpperCase() !== 'REST'
+      ? left.prediction.label
+      : null;
+
+  const resultText = fromMl ?? rightPredText ?? leftPredText;
+
   return {
     leftLink: left.link.kind,
     rightLink: right.link.kind,
@@ -39,9 +57,8 @@ export function useOrbSignal(): OrbSignal {
     recognising: RECOGNISING,
     // Genuinely true only while the platform is producing audio.
     speaking: speech.isSpeaking,
-    // The text the recognition panel is showing. `outcomeText` returns null when
-    // there is no result, which is what makes the orb's flash fire on a real
-    // change rather than on every render.
-    resultText: outcomeText(outcome),
+    // The text the recognition panel is showing. Returns null when there is no
+    // result, which is what makes the orb's flash fire on a real change.
+    resultText,
   };
 }

@@ -33,9 +33,8 @@ export interface AppPreferences {
 export const DEFAULT_PREFERENCES: AppPreferences = {
   signProfileId: DEFAULT_PROFILE_ID,
   targetLanguageCode: 'en',
-  // Off by default. Turning on a feature that cannot work yet should be a
-  // deliberate act, not something the user discovers was already on.
-  voiceEnabled: false,
+  // Enabled by default so trained gestures speak automatically.
+  voiceEnabled: true,
 };
 
 export interface OutputLanguage {
@@ -100,7 +99,7 @@ export function parsePreferences(raw: unknown): AppPreferences {
 
   const targetLanguageCode =
     typeof record.targetLanguageCode === 'string' &&
-    findOutputLanguage(record.targetLanguageCode) !== undefined
+      findOutputLanguage(record.targetLanguageCode) !== undefined
       ? record.targetLanguageCode
       : DEFAULT_PREFERENCES.targetLanguageCode;
 

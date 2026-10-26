@@ -239,7 +239,7 @@ export interface LiveInferenceDeps {
   readonly onUpdate?: () => void;
 }
 
-const DEFAULT_STALE_MS = 1500;
+const DEFAULT_STALE_MS = 2500;
 
 /**
  * Keeps the last window's worth of frames and re-evaluates as they arrive.
@@ -328,7 +328,7 @@ export class LiveInference {
       };
     }
 
-    const built = buildWindow(this.buffer, { frames: WINDOW_FRAMES });
+    const built = buildWindow(this.buffer, { frames: WINDOW_FRAMES, maxGapMs: 1500 });
     if (!built.ok) {
       return {
         kind: 'unknown',

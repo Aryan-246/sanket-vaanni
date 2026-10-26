@@ -57,13 +57,24 @@ export function useAutoSpeak(
 
   useEffect(() => {
     if (!enabled) return;
-    if (!text || typeof text !== 'string' || text.trim().length === 0 || text.toUpperCase() === 'REST') {
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      requested.current = null;
+      return;
+    }
+    const upper = text.toUpperCase();
+    if (upper === 'REST' || upper.includes('REST') || upper.includes('विश्राम')) {
       requested.current = null;
       return;
     }
     if (requested.current === text) return;
 
     requested.current = text;
-    void controller.speak(text, { language, rate });
+    let spokenText = text;
+    if (text.includes(' / ')) {
+      spokenText = language?.startsWith('hi') ? text.split(' / ')[0]! : text.split(' / ')[1]!;
+    } else if (text === 'isl-hello' || text === 'asl-hello') {
+      spokenText = 'HELLO';
+    }
+    void controller.speak(spokenText, { language, rate });
   }, [controller, text, enabled, language, rate]);
 }

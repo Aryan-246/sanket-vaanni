@@ -116,23 +116,6 @@ export function DashboardScreen({
     };
   }, [ml]);
 
-  const handleTestVoice = useCallback(async () => {
-    try {
-      if (!speechController.isAvailable && speechController.probe) {
-        await speechController.probe(false);
-      }
-      const isHindi = preferences.targetLanguageCode === 'hi' || preferences.signProfileId === 'isl';
-      const phrase = isHindi
-        ? 'संकेत वाणी वाक् आउटपुट तैयार है।'
-        : 'Sanket Vaanni speech output ready.';
-      await speechController.speak(phrase, {
-        language: isHindi ? 'hi-IN' : 'en-IN',
-      });
-    } catch {
-      // Handled cleanly by speechController state / badge
-    }
-  }, [preferences.targetLanguageCode, preferences.signProfileId, speechController]);
-
   const [openSheet, setOpenSheet] = useState<OpenSheet>(null);
   const [deviceSide, setDeviceSide] = useState<GloveSide | null>(null);
   const [connectingBoth, setConnectingBoth] = useState(false);
@@ -155,84 +138,9 @@ export function DashboardScreen({
   const orbSignal = useOrbSignal();
   const speech = useSpeechState();
 
-  // --- Embedded ESP32-S3 Models State & Recognition ---
-  const leftConnected = left.link.kind === 'connected';
-  const leftPred = leftConnected ? left.prediction : null;
-  const leftPredLabel = useMemo(() => {
-    if (!leftConnected) return 'Not Connected';
-    if (!leftPred) return 'Waiting for frames…';
-    if (leftPred.status === 'warming_up') return 'Collecting Window (3.0s)';
-    if (leftPred.status === 'valid') return leftPred.label;
-    return 'Unknown Sign';
-  }, [leftConnected, leftPred]);
-
-  const leftPredMeta = useMemo(() => {
-    if (!leftConnected || !leftPred) return null;
-    if (leftPred.status === 'valid' && typeof leftPred.score === 'number') {
-      const conf = Math.round(leftPred.score * 100);
-      const margin = typeof leftPred.margin === 'number' ? ` (+${Math.round(leftPred.margin * 100)}%)` : '';
-      return `Confidence: ${conf}%${margin}`;
-    }
-    return leftPred.status === 'warming_up' ? 'Buffering 30 frames @ 10Hz' : 'Below confidence floor';
-  }, [leftConnected, leftPred]);
-
-  const leftPredColor = useMemo(() => {
-    if (!leftConnected) return palette.textMuted;
-    if (leftPred?.status === 'valid') return palette.success;
-    if (leftPred?.status === 'warming_up') return palette.accent;
-    return palette.warning;
-  }, [leftConnected, leftPred, palette]);
-
-  const rightConnected = right.link.kind === 'connected';
-  const rightPred = rightConnected ? right.prediction : null;
-  const rightPredLabel = useMemo(() => {
-    if (!rightConnected) return 'Not Connected';
-    if (!rightPred) return 'Waiting for frames…';
-    if (rightPred.status === 'warming_up') return 'Collecting Window (3.0s)';
-    if (rightPred.status === 'valid') return rightPred.label;
-    return 'Unknown Sign';
-  }, [rightConnected, rightPred]);
-
-  const rightPredMeta = useMemo(() => {
-    if (!rightConnected || !rightPred) return null;
-    if (rightPred.status === 'valid' && typeof rightPred.score === 'number') {
-      const conf = Math.round(rightPred.score * 100);
-      const margin = typeof rightPred.margin === 'number' ? ` (+${Math.round(rightPred.margin * 100)}%)` : '';
-      return `Confidence: ${conf}%${margin}`;
-    }
-    return rightPred.status === 'warming_up' ? 'Buffering 30 frames @ 10Hz' : 'Below confidence floor';
-  }, [rightConnected, rightPred]);
-
-  const rightPredColor = useMemo(() => {
-    if (!rightConnected) return palette.textMuted;
-    if (rightPred?.status === 'valid') return palette.success;
-    if (rightPred?.status === 'warming_up') return palette.accent;
-    return palette.warning;
-  }, [rightConnected, rightPred, palette]);
-
   const detectedText = useMemo(() => {
-    const fromMl = outcomeText(outcome);
-    if (fromMl) return fromMl;
-    if (
-      rightPred &&
-      rightPred.status === 'valid' &&
-      rightPred.label &&
-      rightPred.label !== 'UNKNOWN' &&
-      rightPred.label.toUpperCase() !== 'REST'
-    ) {
-      return rightPred.label;
-    }
-    if (
-      leftPred &&
-      leftPred.status === 'valid' &&
-      leftPred.label &&
-      leftPred.label !== 'UNKNOWN' &&
-      leftPred.label.toUpperCase() !== 'REST'
-    ) {
-      return leftPred.label;
-    }
-    return null;
-  }, [outcome, rightPred, leftPred]);
+    return outcomeText(outcome);
+  }, [outcome]);
 
   useEffect(() => {
     if (detectedText) {
@@ -410,72 +318,6 @@ export function DashboardScreen({
         testID="detected-text-card"
       />
 
-      {/* 4a — ESP32-S3 Firmware Embedded Recognition Models */}
-      <View style={styles.embeddedModelsContainer} testID="embedded-models-section">
-        <View style={styles.sectionHeaderRow}>
-          <AppText variant="caption" color={palette.textSecondary}>
-            FIRMWARE EMBEDDED ML MODELS (ESP32-S3)
-          </AppText>
-          <AppText variant="caption" color={palette.accent}>
-            {preferences.signProfileId.toUpperCase()}
-          </AppText>
-        </View>
-
-        <View style={styles.dualCardsRow}>
-          {/* Left Glove Model */}
-          <View style={[styles.modelCard, { borderColor: palette.border }]}>
-            <View style={styles.modelCardHeader}>
-              <View style={[styles.sideIndicatorDot, { backgroundColor: leftConnected ? palette.success : palette.textMuted }]} />
-              <AppText variant="label" style={styles.grow}>Left Glove</AppText>
-              <AppText variant="caption" color={palette.textMuted}>
-                {leftPred?.model_v ? `v${leftPred.model_v}` : 'v1.0.0'}
-              </AppText>
-            </View>
-
-            <View style={styles.predictionBadge}>
-              <AppText variant="title" color={leftPredColor}>
-                {leftPredLabel}
-              </AppText>
-              {leftPredMeta ? (
-                <AppText variant="caption" color={palette.textMuted}>
-                  {leftPredMeta}
-                </AppText>
-              ) : null}
-            </View>
-
-            <AppText variant="caption" color={palette.warning}>
-              ⚠️ Left Glove: Middle & Ring channels degraded (reporting low/zero).
-            </AppText>
-          </View>
-
-          {/* Right Glove Model */}
-          <View style={[styles.modelCard, { borderColor: palette.border }]}>
-            <View style={styles.modelCardHeader}>
-              <View style={[styles.sideIndicatorDot, { backgroundColor: rightConnected ? palette.success : palette.textMuted }]} />
-              <AppText variant="label" style={styles.grow}>Right Glove</AppText>
-              <AppText variant="caption" color={palette.textMuted}>
-                {rightPred?.model_v ? `v${rightPred.model_v}` : 'v1.0.0'}
-              </AppText>
-            </View>
-
-            <View style={styles.predictionBadge}>
-              <AppText variant="title" color={rightPredColor}>
-                {rightPredLabel}
-              </AppText>
-              {rightPredMeta ? (
-                <AppText variant="caption" color={palette.textMuted}>
-                  {rightPredMeta}
-                </AppText>
-              ) : null}
-            </View>
-
-            <AppText variant="caption" color={palette.textSecondary}>
-              ✓ 5/5 flex channels active & calibrated
-            </AppText>
-          </View>
-        </View>
-      </View>
-
       {/* 4b — Textboard action for conversation navigation. */}
       {onOpenTextboard ? (
         <ActionButton
@@ -501,7 +343,8 @@ export function DashboardScreen({
         unavailableReason={speech.unavailableReason}
         phrase={detectedText}
         speaking={speech.isSpeaking}
-        onTestVoice={handleTestVoice}
+        showWouldSpeak={false}
+        showGloveSpeaker={false}
         testID="voice-panel"
       />
 
@@ -509,6 +352,7 @@ export function DashboardScreen({
       <HandViewer
         frames={frames}
         live={live}
+        showDemoPresets={false}
         onExplain={() => setOpenSheet('viewer')}
         testID="hand-viewer"
       />
@@ -1004,44 +848,5 @@ const makeStyles = (palette: Palette) =>
     deviceText: {
       flex: 1,
       gap: 2,
-    },
-    embeddedModelsContainer: {
-      gap: spacing.xs,
-      marginVertical: spacing.xs,
-    },
-    sectionHeaderRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: spacing.xs,
-    },
-    dualCardsRow: {
-      flexDirection: 'row',
-      gap: spacing.sm,
-    },
-    modelCard: {
-      flex: 1,
-      backgroundColor: palette.surface,
-      borderRadius: radii.md,
-      borderWidth: 1,
-      padding: spacing.sm,
-      gap: spacing.xs,
-    },
-    modelCardHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.xs,
-    },
-    sideIndicatorDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
-    },
-    predictionBadge: {
-      minHeight: 44,
-      justifyContent: 'center',
-    },
-    grow: {
-      flex: 1,
     },
   });

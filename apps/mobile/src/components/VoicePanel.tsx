@@ -33,6 +33,8 @@ export interface VoicePanelProps {
    * twice. The status badge is drawn either way.
    */
   showTitle?: boolean;
+  showWouldSpeak?: boolean;
+  showGloveSpeaker?: boolean;
   testID?: string;
 }
 
@@ -50,6 +52,8 @@ export function VoicePanel({
   speaking = false,
   onTestVoice,
   showTitle = true,
+  showWouldSpeak = true,
+  showGloveSpeaker = true,
   testID,
 }: VoicePanelProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
@@ -111,19 +115,21 @@ export function VoicePanel({
         </View>
       )}
 
-      <View style={styles.row}>
-        <AppText variant="caption" color={palette.textMuted}>
-          Would speak
-        </AppText>
-        <AppText
-          variant="reading"
-          color={phrase === null ? palette.textMuted : palette.textPrimary}
-          numberOfLines={1}
-          style={styles.rowValue}
-        >
-          {phrase ?? 'Nothing yet'}
-        </AppText>
-      </View>
+      {showWouldSpeak && (
+        <View style={styles.row}>
+          <AppText variant="caption" color={palette.textMuted}>
+            Would speak
+          </AppText>
+          <AppText
+            variant="reading"
+            color={phrase === null ? palette.textMuted : palette.textPrimary}
+            numberOfLines={1}
+            style={styles.rowValue}
+          >
+            {phrase ?? 'Nothing yet'}
+          </AppText>
+        </View>
+      )}
 
       {onTestVoice && (
         <View style={styles.testVoiceRow}>
@@ -139,23 +145,19 @@ export function VoicePanel({
         </View>
       )}
 
-      {/*
-        Not a Toggle. A switch that is permanently off, or that flips to on and
-        changes nothing, is the "button that appears functional but silently does
-        nothing" the brief rules out. This is a statement, so it is rendered as
-        one.
-      */}
-      <View style={styles.row}>
-        <View style={styles.rowText}>
-          <AppText variant="body" color={palette.textSecondary}>
-            Glove speaker
-          </AppText>
-          <AppText variant="caption" color={palette.textMuted} numberOfLines={2}>
-            Would play audio on the glove itself. Needs a verified command protocol.
-          </AppText>
+      {showGloveSpeaker && (
+        <View style={styles.row}>
+          <View style={styles.rowText}>
+            <AppText variant="body" color={palette.textSecondary}>
+              Glove speaker
+            </AppText>
+            <AppText variant="caption" color={palette.textMuted} numberOfLines={2}>
+              Would play audio on the glove itself. Needs a verified command protocol.
+            </AppText>
+          </View>
+          <Badge label="Coming soon" tone="neutral" />
         </View>
-        <Badge label="Coming soon" tone="neutral" />
-      </View>
+      )}
     </Card>
   );
 }

@@ -23,6 +23,7 @@ export interface HandViewerProps {
   onExplain: () => void;
   testID?: string;
   initialRenderer?: 'mesh3d' | 'articulated';
+  showDemoPresets?: boolean;
 }
 
 const SIDES: readonly GloveSide[] = ['left', 'right'];
@@ -81,6 +82,7 @@ export function HandViewer({
   onExplain,
   testID,
   initialRenderer = 'mesh3d',
+  showDemoPresets = true,
 }: HandViewerProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
@@ -237,58 +239,60 @@ export function HandViewer({
         </View>
       )}
 
-      {/* Test / Demo Poses */}
-      <View style={styles.presetSection}>
-        <View style={styles.presetHeader}>
-          <AppText variant="overline" overline color={palette.textMuted}>
-            Test poses · demo
-          </AppText>
-          {activePreset !== null && (
-            <Pressable
-              onPress={() => setActivePreset(null)}
-              accessibilityRole="button"
-              accessibilityLabel="Resume stream"
-            >
-              <AppText variant="caption" color={palette.accent}>
-                Resume stream
-              </AppText>
-            </Pressable>
-          )}
-        </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.presetList}
-        >
-          {DEMO_PRESETS.map((preset) => {
-            const selected = activePreset === preset.id;
-            return (
+      {/* Test / Demo Poses (hidden on dashboard for pure live tracking) */}
+      {showDemoPresets && (
+        <View style={styles.presetSection}>
+          <View style={styles.presetHeader}>
+            <AppText variant="overline" overline color={palette.textMuted}>
+              Test poses · demo
+            </AppText>
+            {activePreset !== null && (
               <Pressable
-                key={preset.id}
-                onPress={() => setActivePreset(selected ? null : preset.id)}
-                style={[
-                  styles.presetChip,
-                  selected && {
-                    backgroundColor: palette.surfaceRaised,
-                    borderColor: palette.accent,
-                  },
-                ]}
+                onPress={() => setActivePreset(null)}
                 accessibilityRole="button"
-                accessibilityLabel={`Test pose ${preset.label}`}
-                accessibilityState={{ selected }}
-                hitSlop={8}
+                accessibilityLabel="Resume stream"
               >
-                <AppText
-                  variant="caption"
-                  color={selected ? palette.accent : palette.textSecondary}
-                >
-                  {preset.label}
+                <AppText variant="caption" color={palette.accent}>
+                  Resume stream
                 </AppText>
               </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>
+            )}
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.presetList}
+          >
+            {DEMO_PRESETS.map((preset) => {
+              const selected = activePreset === preset.id;
+              return (
+                <Pressable
+                  key={preset.id}
+                  onPress={() => setActivePreset(selected ? null : preset.id)}
+                  style={[
+                    styles.presetChip,
+                    selected && {
+                      backgroundColor: palette.surfaceRaised,
+                      borderColor: palette.accent,
+                    },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Test pose ${preset.label}`}
+                  accessibilityState={{ selected }}
+                  hitSlop={8}
+                >
+                  <AppText
+                    variant="caption"
+                    color={selected ? palette.accent : palette.textSecondary}
+                  >
+                    {preset.label}
+                  </AppText>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Wrist rows appear only for hands that are sending data */}
       {wristSides.length > 0 ? (

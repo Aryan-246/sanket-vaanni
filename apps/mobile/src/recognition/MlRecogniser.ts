@@ -35,21 +35,27 @@ export class MlRecogniser implements Recogniser {
     if (!this.isAvailable) return null;
 
     const outcome = this.ml.getSnapshot().inference.outcome;
-    if (outcome.kind !== 'sign') {
+    let targetLabel: { labelId: string; text: string; score: number } | null = null;
+    if (outcome.kind === 'sign') {
+      targetLabel = outcome.label;
+    } else if (outcome.kind === 'unknown' && outcome.nearest && outcome.nearest.score >= 0.35) {
+      targetLabel = outcome.nearest;
+    }
+
+    if (!targetLabel) {
       return null;
     }
 
-    const { label } = outcome;
-    const vocab = this.profile.vocabulary.find((v) => v.signId === label.labelId);
-    const displayText = vocab?.label ?? label.text;
-    console.log(`[MlRecogniser Recognized] ${label.labelId} => "${displayText}" (score: ${label.score.toFixed(3)})`);
+    const vocab = this.profile.vocabulary.find((v) => v.signId === targetLabel.labelId);
+    const displayText = vocab?.label ?? targetLabel.text;
+    console.log(`[MlRecogniser Recognized] ${targetLabel.labelId} => "${displayText}" (score: ${targetLabel.score.toFixed(3)})`);
 
     return {
       profileId: this.profileId,
       candidate: {
-        signId: label.labelId,
+        signId: targetLabel.labelId,
         label: displayText,
-        confidence: label.score,
+        confidence: targetLabel.score,
       },
       timestampMs: Date.now(),
     };

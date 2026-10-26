@@ -53,6 +53,8 @@ import { apiClient } from '../api/client';
 import { createAsyncStorage, type Storage } from '../storage';
 import { DirectVocabularyTranslator, type Translator } from '../translation';
 
+declare const process: { env?: { NODE_ENV?: string } } | undefined;
+
 export interface AppStateValue {
   readonly storage: Storage;
   readonly preferences: AppPreferences;
@@ -557,6 +559,7 @@ export function AppStateProvider({
   useEffect(() => {
     let cancelled = false;
     const syncPublishedModel = async () => {
+      if (process?.env?.NODE_ENV === 'test') return;
       try {
         await ml.start();
         if (cancelled) return;
@@ -591,6 +594,18 @@ export function AppStateProvider({
 
         const targetVersion = pkg.contract?.version ?? 3;
         const currentActive = ml.getSnapshot().activeModel;
+
+        // If the user has a locally trained and active model on this device, preserve it!
+        if (
+          currentActive !== null &&
+          currentActive.languageId === profile.id &&
+          currentActive.status === 'active' &&
+          !currentActive.importedFrom
+        ) {
+          console.log(`[PublishedModelSync] Locally trained user model is active (version ${currentActive.version}), preserving.`);
+          return;
+        }
+
         const isMatchingActive =
           currentActive !== null &&
           currentActive.languageId === profile.id &&

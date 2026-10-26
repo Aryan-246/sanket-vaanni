@@ -231,10 +231,10 @@ export class CaptureController {
       note: null,
     };
 
-    const targetFrames = input.targetFrames ?? (input.recordMode === 'sentence' ? 50 : 250);
-    const sampleIntervalMs = input.sampleIntervalMs ?? 500;
+    const targetFrames = input.targetFrames ?? 0;
+    const sampleIntervalMs = input.sampleIntervalMs ?? 0;
     const recordMode = input.recordMode ?? 'word';
-    const targetMs = input.targetMs ?? targetFrames * sampleIntervalMs;
+    const targetMs = input.targetMs ?? (targetFrames > 0 && sampleIntervalMs > 0 ? targetFrames * sampleIntervalMs : 5000);
 
     this.collected = [];
     this.lastSampleTimestampMs = 0;
@@ -325,7 +325,11 @@ export class CaptureController {
     };
     this.emit();
 
-    if (this.collected.length >= this.state.targetFrames || elapsedMs >= this.state.targetMs) {
+    const reachedTarget =
+      (this.state.targetFrames > 0 && this.collected.length >= this.state.targetFrames) ||
+      (this.state.targetMs > 0 && elapsedMs >= this.state.targetMs);
+
+    if (reachedTarget) {
       void this.finishWindow();
       return true;
     }

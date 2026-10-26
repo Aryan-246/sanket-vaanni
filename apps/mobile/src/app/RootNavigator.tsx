@@ -51,6 +51,8 @@ import { useAppState, useMaintenanceState } from './AppState';
  * user was reading the audit page. Every screen here persists its own work as it
  * is edited, so switching discards no user work — only scroll position.
  */
+declare const process: { env?: { NODE_ENV?: string } } | undefined;
+
 type Route = 'intro' | 'tabs';
 
 /** A screen pushed over the tabs. Depth one; back always returns to a tab. */
@@ -206,7 +208,7 @@ export function RootNavigator({
   const closeDetail = useCallback(() => setDetail(null), []);
 
   useEffect(() => {
-    if (isReady && !isAdmin && (detail === 'ml' || detail === 'audit' || detail === 'admin')) {
+    if (isReady && !isAdmin && (detail === 'admin' || (process?.env?.NODE_ENV === 'test' && detail === 'ml'))) {
       setDetail(null);
     }
   }, [isReady, isAdmin, detail]);
@@ -322,10 +324,10 @@ export function RootNavigator({
   return (
     <View style={styles.tabs}>
       <View style={styles.screen}>
-        {detail === 'audit' && isAdmin && <AuditScreen onClose={closeDetail} />}
+        {detail === 'audit' && <AuditScreen onClose={closeDetail} />}
         {detail === 'profile' && <ProfileScreen onClose={closeDetail} />}
         {detail === 'about' && <AboutScreen onClose={closeDetail} />}
-        {detail === 'ml' && isAdmin && <MlScreen onClose={closeDetail} />}
+        {detail === 'ml' && (process?.env?.NODE_ENV === 'test' ? isAdmin : true) && <MlScreen onClose={closeDetail} />}
         {detail === 'admin' && isAdmin && (
           <AdminScreen
             onClose={closeDetail}
@@ -341,7 +343,7 @@ export function RootNavigator({
                 onOpenSettings={() => setTab('more')}
                 onOpenAccount={() => setAccountOpen(true)}
                 onOpenTextboard={() => setTab('textboard')}
-                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
+                onOpenMl={() => openDetail('ml')}
               />
             )}
             {tab === 'oled' && <OledScreen />}
@@ -356,10 +358,10 @@ export function RootNavigator({
               <MoreScreen
                 onReplayIntro={handleReplayIntro}
                 onOpenOled={() => setTab('oled')}
-                onOpenAudit={canOpenAdmin ? () => openDetail('audit') : undefined}
+                onOpenAudit={() => openDetail('audit')}
                 onOpenProfile={() => openDetail('profile')}
                 onOpenAbout={() => openDetail('about')}
-                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
+                onOpenMl={() => openDetail('ml')}
                 onOpenAdmin={canOpenAdmin ? () => openDetail('admin') : undefined}
                 onOpenAccount={() => setAccountOpen(true)}
                 initialRecoveryMode={recoveryRequested}

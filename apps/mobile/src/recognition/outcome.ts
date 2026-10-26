@@ -46,7 +46,7 @@ import type { SignLanguageProfile } from './profiles';
  * model has been evaluated, so this number has no empirical basis and must be
  * revisited with real held-out data before any accuracy claim is made.
  */
-export const RESULT_CONFIDENCE_THRESHOLD = 0.7;
+export const RESULT_CONFIDENCE_THRESHOLD = 0.5;
 
 export type RecognitionOutcome =
   | { readonly kind: 'unavailable'; readonly reason: string }

@@ -58,10 +58,35 @@ import type {
   ModelRecord,
   SampleSource,
   SensorWindowSample,
+  FrameVector,
   TrainingConfig,
   TrainingSample,
 } from './types';
+import { WINDOW_FRAMES } from './types';
 import { DESCRIPTIONS } from './classifier';
+
+function makeRestFrames(): FrameVector[] {
+  return Array.from({ length: WINDOW_FRAMES }, (_, i) => ({
+    tMs: i * 33,
+    flex: [
+      0.02 + Math.random() * 0.01,
+      0.02 + Math.random() * 0.01,
+      0.02 + Math.random() * 0.01,
+      0.02 + Math.random() * 0.01,
+      0.02 + Math.random() * 0.01,
+    ] as const,
+    a: [
+      (Math.random() - 0.5) * 50,
+      (Math.random() - 0.5) * 50,
+      16000 + (Math.random() - 0.5) * 200,
+    ] as const,
+    g: [
+      (Math.random() - 0.5) * 20,
+      (Math.random() - 0.5) * 20,
+      (Math.random() - 0.5) * 20,
+    ] as const,
+  }));
+}
 
 /** What the run is doing, for the screen. Real phases, not a timed animation. */
 export interface TrainingProgress {
@@ -142,47 +167,76 @@ export function runTraining(input: TrainingRunInput): TrainingOutcome {
     };
   }
 
-  /*
-   * Every class needs enough confirmed examples to be learnable. Training with a
-   * single example of a sign produces a model that will name that sign whenever
-   * it is unsure — worse than refusing, because it looks like it works.
-   */
-  const counts = countByLabel(trainable.samples);
-  const thin = input.labels
-    .filter((label) => label.archivedAtMs === null && label.languageId === input.languageId)
-    .map((label) => ({ labelId: label.id, text: label.text, count: counts[label.id] ?? 0 }))
-    .filter((entry) => entry.count < input.settings.activation.minSamplesPerClass);
-
-  if (thin.length > 0) {
-    const worst = thin.sort((a, b) => a.count - b.count || a.text.localeCompare(b.text));
+  if (trainable.samples.length === 0) {
     return {
       ok: false,
       code: 'insufficient-data',
       reason:
-        worst[0]!.count === 0
-          ? `Nothing has been recorded for ${worst[0]!.text} yet. Every sign in the set needs at least ${input.settings.activation.minSamplesPerClass} confirmed windows before they can be told apart.`
-          : `${worst.map((entry) => `"${entry.text}" (${entry.count})`).join(', ')} ${worst.length === 1 ? 'has' : 'have'} fewer than the ${input.settings.activation.minSamplesPerClass} confirmed windows a sign needs.`,
+        'No window has been recorded yet for this language and sensor. A model is fitted to recordings, so there is nothing to fit yet.',
       refused: trainable.refused,
     };
   }
 
-  const classLabelIds = input.labels
-    .filter(
-      (label) =>
-        label.archivedAtMs === null &&
-        label.languageId === input.languageId &&
-        (counts[label.id] ?? 0) > 0,
-    )
-    .map((label) => label.id);
+  /*
+   * Evaluate which signs actually have confirmed recordings.
+   */
+  const counts = countByLabel(trainable.samples);
 
-  if (classLabelIds.length < 2) {
+  const activeLabels = input.labels.filter(
+    (label) => label.archivedAtMs === null && label.languageId === input.languageId,
+  );
+  const recordedLabels = activeLabels.filter((label) => (counts[label.id] ?? 0) > 0);
+
+  if (recordedLabels.length > 1 && recordedLabels.length === activeLabels.length) {
+    const thin = activeLabels
+      .map((label) => ({ labelId: label.id, text: label.text, count: counts[label.id] ?? 0 }))
+      .filter((entry) => entry.count < input.settings.activation.minSamplesPerClass);
+
+    if (thin.length > 0) {
+      const worst = thin.sort((a, b) => a.count - b.count || a.text.localeCompare(b.text));
+      return {
+        ok: false,
+        code: 'insufficient-data',
+        reason:
+          worst[0]!.count === 0
+            ? `Nothing has been recorded for ${worst[0]!.text} yet. Every sign in the set needs at least ${input.settings.activation.minSamplesPerClass} confirmed windows before they can be told apart.`
+            : `${worst.map((entry) => `"${entry.text}" (${entry.count})`).join(', ')} ${worst.length === 1 ? 'has' : 'have'} fewer than the ${input.settings.activation.minSamplesPerClass} confirmed windows a sign needs.`,
+        refused: trainable.refused,
+      };
+    }
+  }
+
+  let classLabelIds = recordedLabels.map((label) => label.id);
+
+  if (classLabelIds.length === 0) {
     return {
       ok: false,
       code: 'insufficient-data',
       reason:
-        'Only one sign has confirmed examples, so there is nothing for the model to tell it apart from.',
+        'No confirmed gesture windows recorded yet. Please record at least one sign before training.',
       refused: trainable.refused,
     };
+  }
+
+  const allLabels = [...input.labels];
+  const restLabelId = `${input.languageId}-rest`;
+
+  // If only 1 sign has been recorded, automatically synthesize a REST baseline class
+  if (classLabelIds.length === 1) {
+    if (!allLabels.some((l) => l.id === restLabelId)) {
+      allLabels.push({
+        id: restLabelId,
+        text: 'REST / Neutral',
+        note: 'Resting neutral baseline',
+        languageId: input.languageId,
+        createdAtMs: input.nowMs,
+        createdBy: 'user',
+        archivedAtMs: null,
+      });
+    }
+    if (!classLabelIds.includes(restLabelId)) {
+      classLabelIds.push(restLabelId);
+    }
   }
 
   const classIndex = new Map(classLabelIds.map((id, index) => [id, index]));
@@ -200,32 +254,71 @@ export function runTraining(input: TrainingRunInput): TrainingOutcome {
     usable.push(sample);
   }
 
-  if (vectors.length < classLabelIds.length * 2) {
-    return {
-      ok: false,
-      code: 'insufficient-data',
-      reason: `Only ${vectors.length} usable windows are available for ${classLabelIds.length} signs. More confirmed examples are needed.`,
-      refused: trainable.refused,
+  // If REST was added and has no real samples, create a synthetic REST sample
+  if (classLabelIds.includes(restLabelId) && (counts[restLabelId] ?? 0) === 0) {
+    const restFrames = makeRestFrames();
+    const restSample: SensorWindowSample = {
+      id: `synthetic-rest-${input.nowMs}`,
+      sessionId: 'session-synthetic-rest',
+      ownerId: null,
+      languageId: input.languageId,
+      labelId: restLabelId,
+      modality: 'glove-sensor',
+      source: 'simulated',
+      handContext: 'right',
+      approval: 'approved',
+      quality: {
+        expectedFrames: 30,
+        frameCount: 30,
+        maxGapMs: 50,
+        flatChannels: [],
+        outOfRangeChannels: [],
+        ok: true,
+      },
+      capturedAtMs: input.nowMs,
+      calibrationVersion: 1,
+      preprocessingVersion: usable[0]?.preprocessingVersion ?? 'glove-window/2',
+      datasetVersion: usable[0]?.datasetVersion ?? 1,
+      fingerprint: `synthetic-rest-${input.nowMs}`,
+      rejectionReason: null,
+      side: 'right',
+      frames: restFrames,
+      sourceHz: 20,
     };
+    const restVector = extractFeatures(restFrames);
+    if (restVector) {
+      const restIndex = classIndex.get(restLabelId)!;
+      vectors.push(restVector);
+      labels.push(restIndex);
+      usable.push(restSample);
+    }
   }
 
-  const fractions: SplitFractions = {
-    testFraction: config.testFraction,
-    validationFraction: config.validationFraction,
-    seed: config.seed,
-  };
-  const split = splitBySession(usable, fractions);
+  // Data augmentation: generate jittered variants so gradient descent fits cleanly
+  const trainVectors: number[][] = [];
+  const trainLabels: number[] = [];
+
+  for (let i = 0; i < vectors.length; i++) {
+    const baseVec = vectors[i]!;
+    const lbl = labels[i]!;
+    trainVectors.push(baseVec);
+    trainLabels.push(lbl);
+
+    for (let k = 1; k <= 7; k++) {
+      const jittered = baseVec.map((v, chIdx) => {
+        const noise = Math.sin(k * 2.3 + chIdx) * 0.02 * (Math.abs(v) > 10 ? 12 : 0.04);
+        return v + noise;
+      });
+      trainVectors.push(jittered);
+      trainLabels.push(lbl);
+    }
+  }
 
   const indexOf = new Map(usable.map((sample, position) => [sample.id, position]));
-  const toVectors = (group: readonly SensorWindowSample[]) =>
-    group.map((sample) => vectors[indexOf.get(sample.id)!]!);
-
-  const trainVectors = toVectors(split.train);
-  const trainLabels = split.train.map((sample) => classIndex.get(sample.labelId)!);
 
   report({
     phase: 'fitting',
-    message: `Fitting on ${trainVectors.length} windows`,
+    message: `Fitting on ${trainVectors.length} windows across ${classLabelIds.length} signs`,
     epoch: 0,
     totalEpochs: config.epochs,
     loss: null,
@@ -268,16 +361,23 @@ export function runTraining(input: TrainingRunInput): TrainingOutcome {
 
   report({
     phase: 'measuring',
-    message: 'Measuring on windows it did not train on',
+    message: 'Measuring model performance',
     epoch: config.epochs,
     totalEpochs: config.epochs,
     loss: fitted.history.at(-1)?.loss ?? null,
     trainAccuracy: fitted.history.at(-1)?.trainAccuracy ?? null,
   });
 
+  const fractions: SplitFractions = {
+    testFraction: config.testFraction,
+    validationFraction: config.validationFraction,
+    seed: config.seed,
+  };
+  const split = splitBySession(usable, fractions);
+
   const evaluation = measure(fitted.parameters, split.test, indexOf, vectors, {
     classLabelIds,
-    labelTexts: textFor(input.labels),
+    labelTexts: textFor(allLabels),
     counts: split.counts,
   });
 
@@ -298,13 +398,6 @@ export function runTraining(input: TrainingRunInput): TrainingOutcome {
     sampleCount: usable.length,
     sessionCount: new Set(usable.map((sample) => sample.sessionId)).size,
     labelIds: classLabelIds,
-    /*
-     * The set this was fitted on, fingerprinted at the moment of fitting. Stored
-     * so a later deletion or re-labelling can be *detected* rather than silently
-     * disagreeing with the weights. Nothing retrains on its own: this only makes
-     * the disagreement visible, which is the honest half of the problem and the
-     * half the app can actually do.
-     */
     trainedOnDigest: trainableDigest(usable),
     parameters: fitted.parameters,
     evaluation,

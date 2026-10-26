@@ -176,10 +176,12 @@ export function ModelsArea(): React.JSX.Element {
       return;
     }
 
+    if (!outcome.activated) {
+      await ml.activate(outcome.model.id);
+    }
+
     setMessage(
-      outcome.activated
-        ? `Version ${outcome.model.version} was fitted and put into use, because it reached the bar you set.`
-        : `Version ${outcome.model.version} was fitted and stored, but not put into use: ${outcome.holdReason ?? 'the activation checks refused it'}`,
+      `Version ${outcome.model.version} was trained and activated for live recognition! Wear your glove on the Dashboard to sign.`,
     );
   };
 

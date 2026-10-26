@@ -105,6 +105,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [newWordText, setNewWordText] = useState('');
 
   const labels = useMemo(
     () =>
@@ -233,31 +234,36 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
                   onChange={setSentenceIntervalStr}
                   accessibilityLabel="Sentence frame interval"
                 />
-
-                <AppText variant="caption" color={palette.textSecondary}>
-                  Which glove are you recording from?
-                </AppText>
-                <SegmentedControl
-                  options={SIDES}
-                  value={side}
-                  onChange={setSide}
-                  accessibilityLabel="Glove to record from"
-                />
-
-                <AppText variant="caption" color={palette.textSecondary}>
-                  Signing Hand Context
-                </AppText>
-                <SegmentedControl
-                  options={HANDS}
-                  value={handContext}
-                  onChange={setHandContext}
-                  accessibilityLabel="Signing hand"
-                />
               </View>
             )}
 
+            <AppText variant="caption" color={palette.textSecondary}>
+              Which glove are you recording from?
+            </AppText>
+            <SegmentedControl
+              options={SIDES}
+              value={side}
+              onChange={setSide}
+              accessibilityLabel="Glove to record from"
+            />
+
+            <AppText variant="caption" color={palette.textSecondary}>
+              Which hand are you signing with?
+            </AppText>
+            <SegmentedControl
+              options={HANDS}
+              value={handContext}
+              onChange={setHandContext}
+              accessibilityLabel="Signing hand"
+            />
+            <AppText variant="caption" color={palette.textMuted}>
+              This is what you tell the app, not something read off the motion. One glove on the
+              right hand can record a two-handed sign, and a run of readings from the right glove
+              says which sensor moved — not which hand you meant to use.
+            </AppText>
+
             <ActionButton
-              label={recordMode === 'word' ? 'Start Session (250 frames · 0.5s · Right Glove)' : 'Start Sentence Session'}
+              label={recordMode === 'word' ? 'Start a session (250 frames · 0.5s · Right Glove)' : 'Start a session (Sentence)'}
               icon="plus"
               onPress={() => {
                 void start();
@@ -336,13 +342,38 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
                 })}
               </View>
 
+              <View style={styles.inlineAddRow}>
+                <View style={styles.inlineAddInput}>
+                  <TextField
+                    label="Add custom word/sign"
+                    placeholder="e.g. BYE, YES, NO, THANK YOU"
+                    value={newWordText}
+                    onChangeText={setNewWordText}
+                  />
+                </View>
+                <ActionButton
+                  label="+ Add Word"
+                  tone="secondary"
+                  disabled={!newWordText.trim()}
+                  onPress={async () => {
+                    const outcome = await ml.store.createLabel(newWordText.trim(), null);
+                    if (outcome.ok) {
+                      setSelectedLabelId(outcome.data.id);
+                      setNewWordText('');
+                    } else {
+                      setNotice(outcome.error);
+                    }
+                  }}
+                />
+              </View>
+
               <AppText variant="caption" color={palette.textMuted}>
                 Selected: {activeLabel ? `“${activeLabel.text}”` : 'None selected'}. Perform the gesture naturally over the {(target / 1000).toFixed(1)}s window.
               </AppText>
 
               <AppText variant="label">2. Record {state.targetFrames || 250} Frames ({(state.targetMs / 1000).toFixed(1)}s)</AppText>
               <ActionButton
-                label={activeLabel ? `Record “${activeLabel.text}” (${state.targetFrames || 250} frames · ${(state.targetMs / 1000).toFixed(1)}s)` : 'Select a sign above to record'}
+                label={activeLabel ? `Record “${activeLabel.text}” (${state.targetFrames || 250} frames · ${(state.targetMs / 1000).toFixed(1)}s)` : 'Select or add a sign above to record'}
                 disabled={!activeLabel}
                 onPress={beginWindow}
                 icon="scan"
@@ -479,6 +510,15 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               Recorded as “{ml.store.labelText(state.lastSaved.labelId)}”.
             </AppText>
 
+            <View style={styles.buttonRow}>
+              <ActionButton
+                label="Train Model Now"
+                icon="chevronRight"
+                tone="primary"
+                onPress={() => onOpenArea('models')}
+              />
+            </View>
+
             {/*
               The correction is inline rather than behind a dialog, because it has
               an optional free-text reason and a dialog cannot hold a field. The
@@ -608,5 +648,14 @@ const makeStyles = (_palette: Palette) =>
       flexDirection: 'row',
       flexWrap: 'wrap',
       gap: spacing.sm,
+    },
+    inlineAddRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: spacing.sm,
+      marginTop: spacing.xs,
+    },
+    inlineAddInput: {
+      flex: 1,
     },
   });

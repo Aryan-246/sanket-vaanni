@@ -108,13 +108,10 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
     try {
       await captions.start({
         languageTag: language?.speechTag ?? null,
-        // Asked for, not guaranteed — see `captions/controller.ts`.
-        preferOffline: true,
+        preferOffline: false,
       });
     } catch {
-      // The controller has already recorded a readable reason in state, and the
-      // panel below renders it. Swallowing the rejection here is deliberate:
-      // the alternate path would be an unhandled promise rejection.
+      // The controller records a readable reason in state
     }
   }, [captions, captionsState.isListening, language]);
 
@@ -142,11 +139,6 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
 
       <SectionHeader
         label="Conversation"
-        detail={
-          hasAnything
-            ? 'Everything said in this session, most recent last.'
-            : 'Nothing has been said yet.'
-        }
         accessory={
           hasAnything ? (
             <IconButton
@@ -224,7 +216,7 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
             <EmptyState
               icon="chat"
               title="The transcript is empty"
-              body="Turn on captions to have the phone write down what it hears, or type below. Anything the glove recognises appears here too, marked with where it came from."
+              body="Turn on live captions to transcribe speech, or type below. Recognised glove gestures appear here too."
             />
           )}
         </ScrollView>
@@ -241,8 +233,8 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
               <AppText variant="label">Live captions</AppText>
               <AppText variant="caption" color={palette.textMuted}>
                 {captionsState.isListening
-                  ? 'Listening. Words appear as they are recognised.'
-                  : 'Writes down what the phone hears, as it hears it.'}
+                  ? 'Listening... Speak into the phone.'
+                  : 'Transcribes speech into text in real time.'}
               </AppText>
             </View>
             <ActionButton
@@ -257,31 +249,6 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
               }
             />
           </View>
-
-          {/*
-            The disclosure, shown before the switch is pressed rather than after
-            the microphone opens. Two facts, both of which a person can
-            reasonably want to know in advance, and neither of which this app is
-            in a position to decide on the user's behalf.
-          */}
-          <View style={styles.disclosure}>
-            <Icon name="info" size={14} color={palette.textMuted} />
-            <View style={styles.switchText}>
-              <AppText variant="caption" color={palette.textMuted}>
-                Audio is not recorded or kept by Sanket Vaanni. The phone’s own speech
-                recogniser does the transcribing, and whether it works without a network
-                depends on that recogniser — this app asks it to stay offline, but cannot
-                force it to.
-              </AppText>
-              <AppText variant="caption" color={palette.textMuted}>
-                {captionsState.onDeviceModel === true
-                  ? 'This phone reports an on-device recognition model is installed.'
-                  : captionsState.onDeviceModel === false
-                    ? 'This phone reports no on-device recognition model, so speech may be sent to a server to be transcribed.'
-                    : 'This phone does not report whether it has an on-device recognition model.'}
-              </AppText>
-            </View>
-          </View>
         </Card>
       ) : (
         <Card style={styles.group}>
@@ -291,10 +258,6 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
               {microphone.reason}
             </AppText>
           </View>
-          <AppText variant="caption" color={palette.textMuted}>
-            Typing below still works, and anything the glove recognises still appears in the
-            transcript.
-          </AppText>
         </Card>
       )}
 
@@ -309,7 +272,7 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
 
       {/* ------------------------------------------------------- typing */}
 
-      <SectionHeader label="Type" detail="For when neither the glove nor the microphone is the right input." />
+      <SectionHeader label="Type" />
 
       <Card style={styles.group}>
         <TextInput
@@ -354,12 +317,11 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
 
       <SectionHeader label="Say it out loud" />
       <Card style={styles.group}>
-        <AppText variant="caption" color={palette.textSecondary}>
-          {speech.available
-            ? 'Reads the most recent line aloud using this phone’s own voice. Useful when the person you are talking to cannot see the screen.'
-            : (speech.unavailableReason ??
-              'This phone has no speech engine, so nothing can be read aloud.')}
-        </AppText>
+        {!speech.available && speech.unavailableReason ? (
+          <AppText variant="caption" color={palette.textSecondary}>
+            {speech.unavailableReason}
+          </AppText>
+        ) : null}
         <ActionButton
           label={speech.isSpeaking ? 'Stop speaking' : 'Speak the last line'}
           icon="volume"
@@ -384,12 +346,6 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
           }
         />
       </Card>
-
-      <AppText variant="caption" color={palette.textMuted} style={styles.footer}>
-        {account.isGuest
-          ? 'This conversation is held in memory for as long as the app is open. It is not saved, and it is not sent anywhere.'
-          : 'This conversation is held in memory. It is not written to history unless you save it from the History tab.'}
-      </AppText>
     </Screen>
   );
 }

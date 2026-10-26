@@ -29,7 +29,7 @@ import { deviceDisplayName } from '../ble/link';
 import type { DiscoveredGlove, GloveSide } from '../ble/types';
 import { findOutputLanguage } from '../app/preferences';
 import { ACTIVE_HAND_ASSET, HAND_ASSET_FINDINGS, HAND_ASSET_ROUTE } from '../hands/viewer';
-import { outcomeText } from '../recognition/outcome';
+import { outcomeConfidence, outcomeText } from '../recognition/outcome';
 import { useAutoSpeak } from '../speech/useAutoSpeak';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
@@ -311,6 +311,7 @@ export function DashboardScreen({
       {/* 4 — Detected text / recognition card immediately below the orb. */}
       <DetectedTextCard
         text={detectedText}
+        accuracy={outcomeConfidence(outcome)}
         provenance={provenance}
         emptyTitle={emptyCopy.title}
         emptyBody={emptyCopy.body}

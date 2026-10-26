@@ -284,6 +284,10 @@ export class MlCentre {
     readonly side: GloveSide;
     readonly handContext: HandContext;
     readonly targetMs?: number;
+    readonly targetFrames?: number;
+    readonly sampleIntervalMs?: number;
+    readonly recordMode?: 'word' | 'sentence';
+    readonly languageId?: string;
   }): Promise<{ ok: true } | { ok: false; reason: string }> {
     const info = this.deps.gloveInfo(input.side);
     if (!info.connected) {
@@ -294,12 +298,13 @@ export class MlCentre {
     }
 
     const context = this.store.getSnapshot();
-    if (context.languageId.length === 0) {
+    const languageId = input.languageId ?? context.languageId;
+    if (languageId.length === 0) {
       return { ok: false, reason: 'Choose a sign language before recording.' };
     }
 
     const session: StartSessionInput = {
-      languageId: context.languageId,
+      languageId,
       modality: 'glove-sensor',
       source: sourceFor(info),
       side: input.side,
@@ -307,6 +312,9 @@ export class MlCentre {
       calibrationVersion: info.calibrationVersion,
       handContext: input.handContext,
       targetMs: input.targetMs,
+      targetFrames: input.targetFrames,
+      sampleIntervalMs: input.sampleIntervalMs,
+      recordMode: input.recordMode,
     };
 
     await this.capture.startSession(session);

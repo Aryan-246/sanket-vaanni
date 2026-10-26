@@ -205,6 +205,12 @@ export function RootNavigator({
   const openDetail = useCallback((key: DetailKey) => setDetail(key), []);
   const closeDetail = useCallback(() => setDetail(null), []);
 
+  useEffect(() => {
+    if (isReady && !isAdmin && (detail === 'ml' || detail === 'audit' || detail === 'admin')) {
+      setDetail(null);
+    }
+  }, [isReady, isAdmin, detail]);
+
   /**
    * Android back.
    *
@@ -316,41 +322,14 @@ export function RootNavigator({
   return (
     <View style={styles.tabs}>
       <View style={styles.screen}>
-        {detail === 'audit' && <AuditScreen onClose={closeDetail} />}
+        {detail === 'audit' && isAdmin && <AuditScreen onClose={closeDetail} />}
         {detail === 'profile' && <ProfileScreen onClose={closeDetail} />}
         {detail === 'about' && <AboutScreen onClose={closeDetail} />}
-        {/*
-          The learning centre is an administration surface, not a user one.
-
-          Training, dataset and model activation controls are privileged
-          operations, so the screen is behind the same role gate as the console
-          that opens it. `isAdmin` rather than `canOpenAdmin` here on purpose:
-          `canOpenAdmin` also requires the profile to have finished loading, and
-          using it would rip the screen away from an administrator whose profile
-          was mid-refresh. The entry point below still requires `canOpenAdmin`,
         {detail === 'ml' && isAdmin && <MlScreen onClose={closeDetail} />}
-        {/*
-          Guarded the same way as the learning centre above, and for the same
-          reason: this screen reads and changes other people's accounts. The
-          entry point already requires `canOpenAdmin`, so the guard is not the
-          thing that keeps an ordinary user out — it is what happens when the
-          role goes away *while the screen is open*.
-
-          That is not hypothetical. Maintenance mode auto-opens this console for
-          an exempt administrator, and signing out from a screen the app opened
-          for you does not close it. Without this, the console stays mounted
-          after the account that opened it has signed out.
-        */}
         {detail === 'admin' && isAdmin && (
           <AdminScreen
             onClose={closeDetail}
             onOpenMl={() => openDetail('ml')}
-            /*
-             * So a failure card in the console can offer the action a 401
-             * actually needs. Without it the card says the session has expired
-             * and offers nothing, which leaves the reader to work out that the
-             * way back in is the account sheet on the dashboard behind them.
-             */
             onOpenAccount={() => setAccountOpen(true)}
           />
         )}
@@ -362,7 +341,7 @@ export function RootNavigator({
                 onOpenSettings={() => setTab('more')}
                 onOpenAccount={() => setAccountOpen(true)}
                 onOpenTextboard={() => setTab('textboard')}
-                onOpenMl={() => openDetail('ml')}
+                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
               />
             )}
             {tab === 'oled' && <OledScreen />}
@@ -377,10 +356,10 @@ export function RootNavigator({
               <MoreScreen
                 onReplayIntro={handleReplayIntro}
                 onOpenOled={() => setTab('oled')}
-                onOpenAudit={() => openDetail('audit')}
+                onOpenAudit={canOpenAdmin ? () => openDetail('audit') : undefined}
                 onOpenProfile={() => openDetail('profile')}
                 onOpenAbout={() => openDetail('about')}
-                onOpenMl={() => openDetail('ml')}
+                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
                 onOpenAdmin={canOpenAdmin ? () => openDetail('admin') : undefined}
                 onOpenAccount={() => setAccountOpen(true)}
                 initialRecoveryMode={recoveryRequested}

@@ -46,6 +46,8 @@ export interface DetectedTextCardProps {
   text: string | null;
   /** In-progress text that will be replaced. Null when there is none. */
   interim?: string | null;
+  /** Recognition accuracy or confidence in 0..1. */
+  accuracy?: number | null;
   /**
    * Where the text came from. Drives the badge, which must never say `Live`
    * for simulated data.
@@ -72,6 +74,7 @@ const PROVENANCE_BADGE: Record<
 export function DetectedTextCard({
   text,
   interim = null,
+  accuracy = null,
   provenance,
   emptyTitle,
   emptyBody,
@@ -93,36 +96,49 @@ export function DetectedTextCard({
           <AppText variant="overline" overline color={palette.textMuted}>
             Detected text
           </AppText>
-          {/*
-            The badge names the source of the data, not the state of the
-            connection. "Demo" here means every hand being read is a simulator;
-            it is never shown because Demo Mode is switched on somewhere else.
-          */}
           <Badge label={badge.label} tone={badge.tone} dot />
         </View>
 
-        {onExplain ? (
-          <IconButton
-            icon="info"
-            onPress={onExplain}
-            accessibilityLabel="About detected text"
-            accessibilityHint="Explains what is shown here, and what a confidence figure would mean"
-          />
-        ) : null}
+        <View style={styles.headerRight}>
+          {typeof accuracy === 'number' && accuracy > 0 ? (
+            <Badge
+              label={`${Math.round(accuracy * 100)}% accuracy`}
+              tone={accuracy >= 0.8 ? 'success' : 'accent'}
+            />
+          ) : null}
+
+          {onExplain ? (
+            <IconButton
+              icon="info"
+              onPress={onExplain}
+              accessibilityLabel="About detected text"
+              accessibilityHint="Explains what is shown here, and what a confidence figure would mean"
+            />
+          ) : null}
+        </View>
       </View>
 
       <View style={styles.body}>
         {hasText ? (
-          <AppText
-            variant="result"
-            color={palette.textPrimary}
-            style={styles.resultText}
-            selectable
-            accessibilityLabel={`Detected text: ${text}`}
-            accessibilityLiveRegion="polite"
-          >
-            {text}
-          </AppText>
+          <View style={styles.resultContainer}>
+            <AppText
+              variant="result"
+              color={palette.textPrimary}
+              style={styles.resultText}
+              selectable
+              accessibilityLabel={`Detected text: ${text}`}
+              accessibilityLiveRegion="polite"
+            >
+              {text}
+            </AppText>
+            {typeof accuracy === 'number' && accuracy > 0 ? (
+              <View style={styles.accuracyCornerBadge} testID="accuracy-corner-badge">
+                <AppText variant="caption" color={palette.accent} style={styles.accuracyCornerText}>
+                  {Math.round(accuracy * 100)}% accuracy
+                </AppText>
+              </View>
+            ) : null}
+          </View>
         ) : hasInterim ? null : (
           <View style={styles.empty}>
             <AppText variant="heading" color={palette.textSecondary} center>
@@ -207,13 +223,35 @@ const makeStyles = (_palette: Palette) =>
       gap: spacing.xs,
       alignItems: 'flex-start',
     },
+    headerRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+    },
     body: {
       minHeight: 92,
       justifyContent: 'center',
       gap: spacing.sm,
     },
+    resultContainer: {
+      position: 'relative',
+      paddingVertical: spacing.xs,
+    },
     resultText: {
       letterSpacing: -0.6,
+    },
+    accuracyCornerBadge: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      paddingHorizontal: spacing.xs,
+      paddingVertical: 2,
+      borderRadius: 6,
+      backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    },
+    accuracyCornerText: {
+      fontWeight: '600',
+      fontSize: 11,
     },
     interim: {
       opacity: 0.85,

@@ -24,10 +24,11 @@ import { Badge, type BadgeTone } from '../../components/Badge';
 import { Card } from '../../components/Card';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { EmptyState } from '../../components/EmptyState';
+import { SegmentedControl } from '../../components/SegmentedControl';
 import { Sheet } from '../../components/Sheet';
 import { TextField } from '../../components/TextField';
 import { describeDataset, MODALITY_LABEL, SOURCE_LABEL, thinClasses } from '../../ml';
-import type { SampleHeader } from '../../ml';
+import type { LabelDefinition, SampleHeader } from '../../ml';
 import { spacing } from '../../theme';
 import { useStyles, useTheme } from '../../theme/ThemeProvider';
 import type { Palette } from '../../theme/palette';
@@ -46,6 +47,12 @@ const APPROVAL_LABEL: Record<SampleHeader['approval'], string> = {
   rejected: 'Marked wrong',
 };
 
+const LANGUAGE_OPTIONS = [
+  { value: 'isl', label: 'ISL (Indian Sign Language)' },
+  { value: 'asl', label: 'ASL (American Sign Language)' },
+  { value: 'bsl', label: 'BSL (British Sign Language)' },
+];
+
 export function DatasetArea(): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
@@ -57,6 +64,7 @@ export function DatasetArea(): React.JSX.Element {
   const [signError, setSignError] = useState<string | null>(null);
   const [openSample, setOpenSample] = useState<SampleHeader | null>(null);
   const [deleting, setDeleting] = useState<SampleHeader | null>(null);
+  const [deletingLabel, setDeletingLabel] = useState<LabelDefinition | null>(null);
   const [busy, setBusy] = useState(false);
 
   const summary = ml.store.summary();
@@ -120,6 +128,14 @@ export function DatasetArea(): React.JSX.Element {
     if (!outcome.ok) setSignError(outcome.error);
   };
 
+  const deleteSign = async (labelId: string) => {
+    setBusy(true);
+    const outcome = await ml.store.deleteLabel(labelId);
+    setBusy(false);
+    setDeletingLabel(null);
+    if (!outcome.ok) setSignError(outcome.error);
+  };
+
   const labelOf = (labelId: string) => data.labels.find((label) => label.id === labelId) ?? null;
 
   return (
@@ -130,11 +146,23 @@ export function DatasetArea(): React.JSX.Element {
         </NoteCard>
       ) : null}
 
+      <Section
+        label="Sign Language Profile"
+        detail="Choose the sign language you are defining words and training for."
+      >
+        <SegmentedControl
+          options={LANGUAGE_OPTIONS}
+          value={data.languageId}
+          onChange={(lang) => ml.setLanguage(lang)}
+          accessibilityLabel="Sign language"
+        />
+      </Section>
+
       {/* ------------------------------------------------------------ the signs */}
 
       <Section
-        label="Signs"
-        detail="Your own working names for your own recordings. Nothing here reads a name off the motion, and nothing suggests one."
+        label="Signs & Vocabulary"
+        detail="Define or remove signs. You can delete incorrect words or their dataset samples anytime."
       >
         <Card style={styles.stack}>
           <TextField
@@ -167,7 +195,7 @@ export function DatasetArea(): React.JSX.Element {
             body="A window cannot be filed without a name, and this is where the names are made."
             action={
               <ActionButton
-                label="Load 5 Starter Words (ASL)"
+                label="Load Starter Words"
                 tone="primary"
                 onPress={() => { void ml.store.ensureCanonicalLabels(data.languageId); }}
               />
@@ -195,16 +223,24 @@ export function DatasetArea(): React.JSX.Element {
                   <AppText variant="caption" color={palette.textMuted} style={styles.grow}>
                     {label.archivedAtMs === null
                       ? 'In use. Windows can be filed under it.'
-                      : 'Retired. Windows already recorded under it keep their label, and the model card still names them.'}
+                      : 'Retired. Existing windows keep their label.'}
                   </AppText>
-                  {label.archivedAtMs === null ? (
+                  <View style={styles.headRow}>
+                    {label.archivedAtMs === null ? (
+                      <ActionButton
+                        label="Retire"
+                        tone="ghost"
+                        compact
+                        onPress={() => { void archive(label.id); }}
+                      />
+                    ) : null}
                     <ActionButton
-                      label="Retire"
-                      tone="ghost"
+                      label="Delete"
+                      tone="danger"
                       compact
-                      onPress={() => { void archive(label.id); }}
+                      onPress={() => setDeletingLabel(label)}
                     />
-                  ) : null}
+                  </View>
                 </View>
               </Row>
             ))}
@@ -408,6 +444,22 @@ export function DatasetArea(): React.JSX.Element {
           if (deleting !== null) void deleteSample(deleting.id);
         }}
         onCancel={() => setDeleting(null)}
+      />
+
+      <ConfirmDialog
+        visible={deletingLabel !== null}
+        title={`Delete “${deletingLabel?.text ?? ''}”?`}
+        message={
+          deletingLabel === null
+            ? ''
+            : `This will permanently delete the word “${deletingLabel.text}” and remove all recorded dataset samples for it. This action cannot be undone.`
+        }
+        confirmLabel="Delete Word & Data"
+        destructive
+        onConfirm={() => {
+          if (deletingLabel !== null) void deleteSign(deletingLabel.id);
+        }}
+        onCancel={() => setDeletingLabel(null)}
       />
     </View>
   );

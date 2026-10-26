@@ -293,6 +293,25 @@ export class MlStore implements CaptureSink {
     return { ok: true, data: archived };
   }
 
+  /** Permanently deletes a sign and removes all dataset samples recorded under it. */
+  async deleteLabel(labelId: string): Promise<MlResult<void>> {
+    const label = this.snapshot.labels.find((entry) => entry.id === labelId);
+    if (label === undefined) return { ok: false, error: 'That sign is no longer in the list.' };
+
+    const samplesToDelete = this.snapshot.headers
+      .filter((entry) => entry.labelId === labelId)
+      .map((entry) => entry.id);
+
+    if (samplesToDelete.length > 0) {
+      await this.deleteSamples(samplesToDelete);
+    }
+
+    const labels = this.snapshot.labels.filter((entry) => entry.id !== labelId);
+    await this.storage.setJson(ML_KEYS.labels, labels);
+    this.patch({ labels, error: null });
+    return { ok: true, data: undefined };
+  }
+
   /**
    * Provisions the canonical 5 starter vocabulary words for the language if no active signs exist.
    * HELLO, BYE, THANK YOU, YES, NO.

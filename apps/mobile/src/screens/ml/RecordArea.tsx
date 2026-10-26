@@ -48,6 +48,30 @@ import { Meter, NoteCard, Row, Section } from './shared';
 import { useMl, useMlData, useMlSnapshot } from './hooks';
 import type { MlArea } from './areas';
 
+const RECORD_MODES: readonly { value: 'word' | 'sentence'; label: string }[] = [
+  { value: 'word', label: 'Word (250 frames · 0.5s)' },
+  { value: 'sentence', label: 'Sentence (Custom)' },
+];
+
+const SENTENCE_FRAMES: readonly { value: '50' | '100' | '250' | '500'; label: string }[] = [
+  { value: '50', label: '50 frames' },
+  { value: '100', label: '100 frames' },
+  { value: '250', label: '250 frames' },
+  { value: '500', label: '500 frames' },
+];
+
+const SENTENCE_INTERVALS: readonly { value: '200' | '500' | '1000'; label: string }[] = [
+  { value: '200', label: '0.2s interval' },
+  { value: '500', label: '0.5s interval' },
+  { value: '1000', label: '1.0s interval' },
+];
+
+const LANGUAGES: readonly { value: string; label: string }[] = [
+  { value: 'isl', label: 'ISL (Indian Sign Language)' },
+  { value: 'asl', label: 'ASL (American Sign Language)' },
+  { value: 'bsl', label: 'BSL (British Sign Language)' },
+];
+
 const SIDES: readonly { value: GloveSide; label: string }[] = [
   { value: 'right', label: 'Right glove' },
   { value: 'left', label: 'Left glove' },
@@ -59,12 +83,6 @@ const HANDS: readonly { value: HandContext; label: string }[] = [
   { value: 'both', label: 'Two-handed' },
 ];
 
-const DURATIONS: readonly { value: '3000' | '5000' | '7000'; label: string }[] = [
-  { value: '3000', label: '3.0s (Fast)' },
-  { value: '5000', label: '5.0s (Recommended)' },
-  { value: '7000', label: '7.0s (Extended)' },
-];
-
 export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void }): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
@@ -73,18 +91,14 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const data = useMlData();
   const { calibration } = useAppState();
 
-  /*
-   * `capture` here is the controller — the thing with methods. Its *state* is
-   * `snapshot.capture`, read through the hook so the screen re-renders when the
-   * phase or the frame count changes. Reading `ml.capture.getSnapshot()` inline
-   * would draw a value React never learned had changed.
-   */
   const capture = ml.capture;
   const state = snapshot.capture;
 
+  const [recordMode, setRecordMode] = useState<'word' | 'sentence'>('word');
   const [side, setSide] = useState<GloveSide>('right');
   const [handContext, setHandContext] = useState<HandContext>('right');
-  const [durationMsStr, setDurationMsStr] = useState<'3000' | '5000' | '7000'>('5000');
+  const [sentenceFramesStr, setSentenceFramesStr] = useState<'50' | '100' | '250' | '500'>('100');
+  const [sentenceIntervalStr, setSentenceIntervalStr] = useState<'200' | '500' | '1000'>('500');
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
   const [showAllLabelsInReview, setShowAllLabelsInReview] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -103,18 +117,23 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const activeLabelId = selectedLabelId ?? labels[0]?.id ?? null;
   const activeLabel = labels.find((l) => l.id === activeLabelId) ?? null;
 
-  /*
-   * The progress of the window being recorded. Measured from the timestamps of
-   * the frames that actually arrived — see `capture.ts` on why `framesNeeded` is
-   * zero until the window completes rather than a nominal target.
-   */
   const elapsed = state.elapsedMs;
   const target = state.targetMs;
 
   const start = async () => {
     setNotice(null);
-    const durationMs = Number(durationMsStr);
-    const outcome = await ml.beginCapture({ side, handContext, targetMs: durationMs });
+    const targetFrames = recordMode === 'word' ? 250 : Number(sentenceFramesStr);
+    const sampleIntervalMs = recordMode === 'word' ? 500 : Number(sentenceIntervalStr);
+    const targetMs = targetFrames * sampleIntervalMs;
+    const outcome = await ml.beginCapture({
+      side: recordMode === 'word' ? 'right' : side,
+      handContext: recordMode === 'word' ? 'right' : handContext,
+      targetMs,
+      targetFrames,
+      sampleIntervalMs,
+      recordMode,
+      languageId: data.languageId,
+    });
     if (!outcome.ok) setNotice(outcome.reason);
   };
 
@@ -165,60 +184,80 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
 
       {session === null ? (
         <Section
-          label="Start a session"
-          detail="A session is one sitting. Windows from one sitting are near-duplicates, and the split keeps them together when a model is measured."
+          label="Recording Setup"
+          detail="Train real signs using calibrated glove telemetry. Words capture 250 frames at 0.5s each for the Right Glove."
         >
           <Card style={styles.stack}>
             <AppText variant="caption" color={palette.textSecondary}>
-              Language Profile: {data.languageId.toUpperCase()}
-            </AppText>
-
-            <AppText variant="caption" color={palette.textSecondary}>
-              Which glove are you recording from?
+              Sign Language Profile
             </AppText>
             <SegmentedControl
-              options={SIDES}
-              value={side}
-              onChange={setSide}
-              accessibilityLabel="Glove to record from"
+              options={LANGUAGES}
+              value={data.languageId}
+              onChange={(l) => ml.setLanguage(l)}
+              accessibilityLabel="Sign language profile"
             />
 
             <AppText variant="caption" color={palette.textSecondary}>
-              Which hand are you signing with?
+              Training Type
             </AppText>
             <SegmentedControl
-              options={HANDS}
-              value={handContext}
-              onChange={setHandContext}
-              accessibilityLabel="Signing hand"
+              options={RECORD_MODES}
+              value={recordMode}
+              onChange={setRecordMode}
+              accessibilityLabel="Training type"
             />
-            <AppText variant="caption" color={palette.textMuted}>
-              This is what you tell the app, not something read off the motion. One glove on the
-              right hand can record a two-handed sign, and a run of readings from the right glove
-              says which sensor moved — not which hand you meant to use.
-            </AppText>
 
-            <AppText variant="caption" color={palette.textSecondary}>
-              Window duration (recording time)
-            </AppText>
-            <SegmentedControl
-              options={DURATIONS}
-              value={durationMsStr}
-              onChange={setDurationMsStr}
-              accessibilityLabel="Window duration"
-            />
-            <AppText variant="caption" color={palette.textMuted}>
-              A 5.0s window captures complete gesture dynamics (attack, apex hold, and release) with ~50 raw readings for maximum ML training accuracy.
-            </AppText>
-
-            {side === 'left' ? (
-              <NoteCard tone="warning" testID="left-glove-degraded-warning">
-                Experimental Capture (Left Glove): Middle and Ring channels are currently degraded (reporting low/zero). Capture proceeds using active channels (Thumb, Index, Pinky, Accel, Gyro). Gestures relying on Middle/Ring may have lower precision until hardware repair.
+            {recordMode === 'word' ? (
+              <NoteCard tone="muted">
+                Word Mode: Exactly 250 frames at 0.5s detection interval using the Right Hand Glove. Appends into the dataset (right_glove_dataset.csv).
               </NoteCard>
-            ) : null}
+            ) : (
+              <View style={styles.stack}>
+                <AppText variant="caption" color={palette.textSecondary}>
+                  Sentence Frames
+                </AppText>
+                <SegmentedControl
+                  options={SENTENCE_FRAMES}
+                  value={sentenceFramesStr}
+                  onChange={setSentenceFramesStr}
+                  accessibilityLabel="Sentence frames"
+                />
+
+                <AppText variant="caption" color={palette.textSecondary}>
+                  Sampling Interval (Time per Frame)
+                </AppText>
+                <SegmentedControl
+                  options={SENTENCE_INTERVALS}
+                  value={sentenceIntervalStr}
+                  onChange={setSentenceIntervalStr}
+                  accessibilityLabel="Sentence frame interval"
+                />
+
+                <AppText variant="caption" color={palette.textSecondary}>
+                  Which glove are you recording from?
+                </AppText>
+                <SegmentedControl
+                  options={SIDES}
+                  value={side}
+                  onChange={setSide}
+                  accessibilityLabel="Glove to record from"
+                />
+
+                <AppText variant="caption" color={palette.textSecondary}>
+                  Signing Hand Context
+                </AppText>
+                <SegmentedControl
+                  options={HANDS}
+                  value={handContext}
+                  onChange={setHandContext}
+                  accessibilityLabel="Signing hand"
+                />
+              </View>
+            )}
 
             <ActionButton
-              label="Start a recording session"
+              label={recordMode === 'word' ? 'Start Session (250 frames · 0.5s · Right Glove)' : 'Start Sentence Session'}
               icon="plus"
               onPress={() => {
                 void start();
@@ -232,16 +271,14 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
             <Row>
               <View style={styles.headRow}>
                 <AppText variant="label" style={styles.grow}>
-                  Recording from the {session.deviceLabel ?? 'unknown source'} on the {session.source === 'simulated' ? 'simulated' : 'real'} pipeline
+                  Recording from {session.deviceLabel ?? 'Right Glove'} ({state.recordMode === 'word' ? 'Word · 250 frames' : `Sentence · ${state.targetFrames} frames`})
                 </AppText>
                 <AppText variant="caption" color={palette.textMuted}>
                   {SOURCE_LABEL[session.source]}
                 </AppText>
               </View>
               <AppText variant="caption" color={palette.textMuted}>
-                Filing windows under {session.languageId}, from the{' '}
-                {session.deviceLabel === null ? 'unknown' : session.deviceLabel} transport,
-                calibration version {session.calibrationVersion ?? 'none'}. Target duration is {(target / 1000).toFixed(1)}s per window. Every window records which one produced it.
+                Filing windows under {session.languageId.toUpperCase()} ({session.source === 'simulated' ? 'simulated' : 'real BLE'}). Sampling at {(state.sampleIntervalMs / 1000).toFixed(1)}s per frame ({state.targetFrames} frames total).
               </AppText>
             </Row>
             <Row last>
@@ -303,9 +340,9 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
                 Selected: {activeLabel ? `“${activeLabel.text}”` : 'None selected'}. Perform the gesture naturally over the {(target / 1000).toFixed(1)}s window.
               </AppText>
 
-              <AppText variant="label">2. Record {(target / 1000).toFixed(1)}s Sensor Window</AppText>
+              <AppText variant="label">2. Record {state.targetFrames || 250} Frames ({(state.targetMs / 1000).toFixed(1)}s)</AppText>
               <ActionButton
-                label={activeLabel ? `Record “${activeLabel.text}” (${(target / 1000).toFixed(1)}s)` : 'Select a sign above to record'}
+                label={activeLabel ? `Record “${activeLabel.text}” (${state.targetFrames || 250} frames · ${(state.targetMs / 1000).toFixed(1)}s)` : 'Select a sign above to record'}
                 disabled={!activeLabel}
                 onPress={beginWindow}
                 icon="scan"
@@ -325,18 +362,17 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               </AppText>
             </View>
             <AppText variant="caption" color={palette.textSecondary}>
-              Hold or perform the sign with the {side === 'left' ? 'Left' : 'Right'} glove. Extended ${(target / 1000).toFixed(1)}s window captures full gesture preparation, apex, and release with maximum sensor data for optimal ML accuracy.
+              Hold or perform the sign with the {side === 'left' ? 'Left' : 'Right'} glove. Capturing {state.targetFrames || 250} frames at {(state.sampleIntervalMs / 1000).toFixed(1)}s intervals for maximum ML accuracy.
             </AppText>
 
             <Meter
               testID="capture-progress"
-              value={target === 0 ? null : elapsed / target}
-              label={`${(elapsed / 1000).toFixed(1)} of ${(target / 1000).toFixed(1)} seconds`}
+              value={state.targetFrames > 0 ? Math.min(1, state.frames / state.targetFrames) : null}
+              label={`${state.frames} of ${state.targetFrames || 250} frames (${(state.frames * (state.sampleIntervalMs / 1000)).toFixed(1)}s)`}
               unknown="Waiting for the first reading."
             />
             <AppText variant="caption" color={palette.textMuted}>
-              {state.frames} incoming reading{state.frames === 1 ? '' : 's'} received so far, at the
-              transport's own rate.
+              {state.frames} frame{state.frames === 1 ? '' : 's'} recorded at {(state.sampleIntervalMs / 1000).toFixed(1)}s per frame. Real Right Glove BLE stream.
             </AppText>
             <View style={styles.buttonRow}>
               <ActionButton

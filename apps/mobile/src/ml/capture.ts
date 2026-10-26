@@ -36,7 +36,7 @@
  */
 import type { GloveSide, SensorSample } from '../sensors/types';
 import { windowFingerprint } from './dataset';
-import { buildWindow, qualityNote } from './window';
+import { buildWindow, MAX_GAP_MS, qualityNote } from './window';
 import {
   DATASET_VERSION,
   PREPROCESSING_VERSION,
@@ -99,6 +99,12 @@ export interface CaptureState {
   readonly elapsedMs: number;
   /** Milliseconds a full window spans. */
   readonly targetMs: number;
+  /** Target frame count (e.g. 250 frames for word). */
+  readonly targetFrames: number;
+  /** Sample interval in ms (e.g. 500ms = 0.5s). */
+  readonly sampleIntervalMs: number;
+  /** Mode: 'word' or 'sentence'. */
+  readonly recordMode: 'word' | 'sentence';
   readonly pending: PendingWindow | null;
   /** What the last saved window was, so the screen can confirm it. */
   readonly lastSaved: { readonly sampleId: string; readonly labelId: string; readonly atMs: number } | null;
@@ -157,21 +163,23 @@ export interface StartSessionInput {
   readonly calibrationVersion: number | null;
   /**
    * Which hand the person is signing with, as the caller states it.
-   *
-   * Deliberately *not* inferred from the frames: a run of readings from the right
-   * glove says which sensor moved, not which hand the person meant to use, and a
-   * two-handed sign recorded from one glove is normal. Reading it off the motion
-   * would be the same mistake as reading a label off the motion.
    */
   readonly handContext: HandContext;
-  /** Optional custom window length in ms (defaults to WINDOW_MS = 5000ms). */
+  /** Optional custom window length in ms. */
   readonly targetMs?: number;
+  /** Optional target frame count (default 250 for word). */
+  readonly targetFrames?: number;
+  /** Optional sample interval in ms (default 500ms = 0.5s). */
+  readonly sampleIntervalMs?: number;
+  /** Mode: 'word' or 'sentence'. */
+  readonly recordMode?: 'word' | 'sentence';
 }
 
 export class CaptureController {
   private readonly deps: CaptureDeps;
   private state: CaptureState;
   private collected: SensorSample[] = [];
+  private lastSampleTimestampMs = 0;
   /** The glove this session records from, set when the session opens. */
   private side: GloveSide | null = null;
   /** The hand the caller said the person is signing with. */
@@ -186,6 +194,9 @@ export class CaptureController {
       framesNeeded: 0,
       elapsedMs: 0,
       targetMs: WINDOW_MS,
+      targetFrames: 250,
+      sampleIntervalMs: 500,
+      recordMode: 'word',
       pending: null,
       lastSaved: null,
       qualityNote: null,
@@ -220,14 +231,23 @@ export class CaptureController {
       note: null,
     };
 
+    const targetFrames = input.targetFrames ?? (input.recordMode === 'sentence' ? 50 : 250);
+    const sampleIntervalMs = input.sampleIntervalMs ?? 500;
+    const recordMode = input.recordMode ?? 'word';
+    const targetMs = input.targetMs ?? targetFrames * sampleIntervalMs;
+
     this.collected = [];
+    this.lastSampleTimestampMs = 0;
     this.state = {
       ...this.state,
       phase: 'ready',
       session,
       frames: 0,
       elapsedMs: 0,
-      targetMs: input.targetMs ?? this.state.targetMs ?? WINDOW_MS,
+      targetMs,
+      targetFrames,
+      sampleIntervalMs,
+      recordMode,
       pending: null,
       qualityNote: null,
       error: null,
@@ -261,6 +281,7 @@ export class CaptureController {
     }
 
     this.collected = [];
+    this.lastSampleTimestampMs = 0;
     this.state = {
       ...this.state,
       phase: 'recording',
@@ -277,22 +298,21 @@ export class CaptureController {
   /**
    * Feeds one calibrated frame in. Ignored unless a window is recording.
    *
-   * Ignoring rather than erroring is deliberate: frames arrive from a
-   * subscription that is live whenever the glove is, and a frame arriving
-   * between windows is normal, not a fault.
-   *
-   * Returns true when the window has just completed, so a caller can await the
-   * resulting state change if it needs to.
+   * Enforces sampleIntervalMs (e.g. 500ms = 0.5s per frame) and targetFrames (e.g. 250 frames for words).
    */
   pushFrame(sample: SensorSample): boolean {
     if (this.state.phase !== 'recording' || this.state.session === null) return false;
 
-    // A frame from the other hand is not part of this window. The glove
-    // controller already filters by side; this is the second line of defence —
-    // and the first one that catches a whole window arriving from the wrong
-    // glove, because it compares against the session's own side rather than
-    // against whichever frame happened to arrive first.
+    // Filter by side
     if (this.side !== null && sample.side !== this.side) return false;
+
+    // Throttle by sampleIntervalMs if configured (e.g. 0.5s interval)
+    if (this.state.sampleIntervalMs > 0 && this.lastSampleTimestampMs > 0) {
+      if (sample.timestampMs - this.lastSampleTimestampMs < Math.max(50, this.state.sampleIntervalMs - 35)) {
+        return false;
+      }
+    }
+    this.lastSampleTimestampMs = sample.timestampMs;
 
     this.collected.push(sample);
     const first = this.collected[0]!;
@@ -305,7 +325,7 @@ export class CaptureController {
     };
     this.emit();
 
-    if (elapsedMs >= this.state.targetMs) {
+    if (this.collected.length >= this.state.targetFrames || elapsedMs >= this.state.targetMs) {
       void this.finishWindow();
       return true;
     }
@@ -313,16 +333,14 @@ export class CaptureController {
   }
 
   /**
-   * Ends the window early, or builds it if the time is already up.
-   *
-   * Used by the "finish now" control and by `pushFrame` itself, so an early stop
-   * and a full-length window take exactly the same path.
+   * Ends the window early, or builds it if the time/frame target is reached.
    */
   async finishWindow(): Promise<void> {
     if (this.state.phase !== 'recording' || this.state.session === null) return;
 
     const session = this.state.session;
-    const built = buildWindow(this.collected, { frames: WINDOW_FRAMES });
+    const maxGap = Math.max(MAX_GAP_MS, (this.state.sampleIntervalMs || 500) * 3);
+    const built = buildWindow(this.collected, { frames: WINDOW_FRAMES, maxGapMs: maxGap });
 
     if (!built.ok) {
       this.collected = [];

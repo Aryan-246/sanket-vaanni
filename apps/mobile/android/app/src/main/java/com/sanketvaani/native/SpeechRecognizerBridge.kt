@@ -3,21 +3,26 @@ package com.sanketvaani.native
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 
 /**
  * Live captions from the phone's speech recogniser.
  *
- * Designed for continuous listening:
- *  - Automatically continues listening across sentences until the user explicitly stops it.
- *  - Gracefully ignores silence pauses without crashing or disconnecting.
- *  - Prefers standard Google speech service to avoid OEM-specific disconnection crashes (code 11).
+ * Designed for continuous, robust listening:
+ *  - Dynamically targets verified RecognitionService on the device (e.g. Google TTS / Speech Services).
+ *  - Automatically continues listening across sentences with gentle spacing.
+ *  - Handles silence pauses with bounded retries to prevent rate limiting (code 10).
+ *  - Prevents rapid cyclic reconnects on broken binders (code 11).
  *  - Never locks into an uninstalled offline pack.
  */
 class SpeechRecognizerBridge(private val context: Context) {
@@ -68,30 +73,53 @@ class SpeechRecognizerBridge(private val context: Context) {
     }
 
   private fun createRecognizer(): SpeechRecognizer? {
-    // 1. Try Google App voice recognition (most compatible across Android devices)
-    val googleSearchComponent = ComponentName(
-      "com.google.android.googlequicksearchbox",
-      "com.google.android.voicesearch.serviceapi.GoogleRecognitionService"
-    )
     try {
-      val r = SpeechRecognizer.createSpeechRecognizer(context, googleSearchComponent)
-      if (r != null) return r
-    } catch (_: Exception) {}
+      // 1. Query all installed RecognitionService components on this device
+      val queryIntent = Intent(RecognitionService.SERVICE_INTERFACE)
+      val availableServices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        context.packageManager.queryIntentServices(
+          queryIntent,
+          PackageManager.ResolveInfoFlags.of(0)
+        )
+      } else {
+        context.packageManager.queryIntentServices(queryIntent, 0)
+      }
 
-    // 2. Try Google TTS recognition service
-    val googleTtsComponent = ComponentName(
-      "com.google.android.tts",
-      "com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService"
-    )
-    try {
-      val r = SpeechRecognizer.createSpeechRecognizer(context, googleTtsComponent)
-      if (r != null) return r
-    } catch (_: Exception) {}
+      // Check for Google Speech Recognition & Synthesis service (com.google.android.tts)
+      val ttsService = availableServices.firstOrNull {
+        it.serviceInfo?.packageName == "com.google.android.tts"
+      }
+      if (ttsService != null) {
+        val component = ComponentName(ttsService.serviceInfo.packageName, ttsService.serviceInfo.name)
+        val r = SpeechRecognizer.createSpeechRecognizer(context, component)
+        if (r != null) {
+          Log.i("SpeechBridge", "Selected Google TTS speech recognizer: $component")
+          return r
+        }
+      }
 
-    // 3. Fallback to default system speech recognizer
+      // 2. Check system secure default voice_recognition_service setting
+      val defaultSetting = Settings.Secure.getString(context.contentResolver, "voice_recognition_service")
+      if (!defaultSetting.isNullOrBlank()) {
+        val defaultComponent = ComponentName.unflattenFromString(defaultSetting)
+        if (defaultComponent != null) {
+          val r = SpeechRecognizer.createSpeechRecognizer(context, defaultComponent)
+          if (r != null) {
+            Log.i("SpeechBridge", "Selected default voice service: $defaultComponent")
+            return r
+          }
+        }
+      }
+    } catch (e: Exception) {
+      Log.w("SpeechBridge", "Exception checking specific speech services", e)
+    }
+
+    // 3. Fallback to standard platform SpeechRecognizer
     return try {
+      Log.i("SpeechBridge", "Falling back to standard SpeechRecognizer.createSpeechRecognizer")
       SpeechRecognizer.createSpeechRecognizer(context)
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+      Log.e("SpeechBridge", "Failed to create SpeechRecognizer", e)
       null
     }
   }
@@ -125,15 +153,8 @@ class SpeechRecognizerBridge(private val context: Context) {
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
           putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
           putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-          // Only request offline if the platform explicitly confirms an on-device model exists
-          if (preferOffline && isOnDeviceRecognitionAvailable() == true) {
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-          }
           putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
           putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-          putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
-          putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-          putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
           if (!languageTag.isNullOrBlank()) {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
           }
@@ -143,8 +164,10 @@ class SpeechRecognizerBridge(private val context: Context) {
       fresh.setRecognitionListener(createListener(fresh, intent, languageTag, onResult))
 
       try {
+        Log.i("SpeechBridge", "Starting speech recognition listening...")
         fresh.startListening(intent)
       } catch (error: Exception) {
+        Log.e("SpeechBridge", "fresh.startListening threw exception", error)
         setError("The speech recogniser could not start.", null)
       }
     }
@@ -157,11 +180,20 @@ class SpeechRecognizerBridge(private val context: Context) {
     onResult: (String) -> Unit
   ): RecognitionListener =
     object : RecognitionListener {
-      override fun onReadyForSpeech(params: Bundle?) = Unit
-      override fun onBeginningOfSpeech() = Unit
+      private var silenceRetries = 0
+
+      override fun onReadyForSpeech(params: Bundle?) {
+        Log.d("SpeechBridge", "onReadyForSpeech")
+      }
+      override fun onBeginningOfSpeech() {
+        Log.d("SpeechBridge", "onBeginningOfSpeech")
+        silenceRetries = 0
+      }
       override fun onRmsChanged(rmsdB: Float) = Unit
       override fun onBufferReceived(buffer: ByteArray?) = Unit
-      override fun onEndOfSpeech() = Unit
+      override fun onEndOfSpeech() {
+        Log.d("SpeechBridge", "onEndOfSpeech")
+      }
       override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
       override fun onPartialResults(partialResults: Bundle?) {
@@ -171,6 +203,9 @@ class SpeechRecognizerBridge(private val context: Context) {
 
       override fun onResults(results: Bundle?) {
         val text = firstResult(results)
+        Log.d("SpeechBridge", "onResults: $text")
+        silenceRetries = 0
+
         synchronized(lock) {
           finalText = text ?: ""
           partial = ""
@@ -179,56 +214,47 @@ class SpeechRecognizerBridge(private val context: Context) {
           onResult(finalText)
         }
 
-        // Seamless live continuous captioning: continue listening for the next phrase
+        // Continuous captioning: pause briefly before listening for next sentence
         if (desiredListening) {
           main.postDelayed({
             if (desiredListening && recognizer === activeRecognizer) {
               try {
                 activeRecognizer.startListening(intent)
               } catch (e: Exception) {
-                // If restarting existing recognizer fails, recreate cleanly
-                start(languageTag, preferOffline = false, onResult)
+                Log.w("SpeechBridge", "Restarting listener on results failed", e)
+                synchronized(lock) { isListening = false }
               }
             }
-          }, 150)
+          }, 400)
         } else {
           synchronized(lock) { isListening = false }
         }
       }
 
       override fun onError(errorCode: Int) {
-        // Transient errors that naturally occur during silence pauses or idle reconnects:
-        // code 6: ERROR_SPEECH_TIMEOUT (no speech heard)
-        // code 7: ERROR_NO_MATCH (silence or ambient sound)
-        // code 8: ERROR_RECOGNIZER_BUSY (restarting too quickly)
-        // code 11: ERROR_SERVER_DISCONNECTED (speech engine session refresh)
-        // code 12, 13, 14: Language pack/model fallback
-        val isTransient =
-          errorCode == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
-          errorCode == SpeechRecognizer.ERROR_NO_MATCH ||
-          errorCode == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
-          errorCode == 11 ||
-          errorCode == 12 ||
-          errorCode == 13 ||
-          errorCode == 14
+        Log.w("SpeechBridge", "onError: $errorCode (${describeError(errorCode)})")
 
-        if (desiredListening && isTransient) {
+        // Handle silence timeouts (code 6) and no-match (code 7) during active continuous listening
+        val isSilencePause =
+          errorCode == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+          errorCode == SpeechRecognizer.ERROR_NO_MATCH
+
+        if (desiredListening && isSilencePause && silenceRetries < 4) {
+          silenceRetries++
+          Log.i("SpeechBridge", "Silence/pause detected, softly resuming listening (retry $silenceRetries/4)...")
           main.postDelayed({
-            if (desiredListening) {
+            if (desiredListening && recognizer === activeRecognizer) {
               try {
-                if (recognizer === activeRecognizer) {
-                  activeRecognizer.startListening(intent)
-                } else {
-                  start(languageTag, preferOffline = false, onResult)
-                }
+                activeRecognizer.startListening(intent)
               } catch (e: Exception) {
-                start(languageTag, preferOffline = false, onResult)
+                Log.w("SpeechBridge", "Retry after silence failed", e)
               }
             }
-          }, 250)
+          }, 600)
           return
         }
 
+        // For all other errors, or once silence retries are exhausted, cleanly stop and report
         synchronized(lock) {
           isListening = false
           desiredListening = false
@@ -301,6 +327,7 @@ class SpeechRecognizerBridge(private val context: Context) {
         "The recogniser is busy with another request. Try again in a moment."
       SpeechRecognizer.ERROR_SERVER -> "The recogniser's service reported an error."
       SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech was heard."
+      10 -> "Too many speech requests. Please wait a moment and tap Start."
       11 -> "Speech recognition connection was reset. Tap Start to resume."
       12 -> "This language is not supported for speech recognition on this device."
       13 -> "Offline speech model is not installed. Download voice data in device settings or connect to the internet."

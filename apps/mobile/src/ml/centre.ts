@@ -281,7 +281,7 @@ export class MlCentre {
    * no windows and would leave the user labelling nothing.
    */
   async beginCapture(input: {
-    readonly side: GloveSide;
+    readonly side: GloveSide | 'both';
     readonly handContext: HandContext;
     readonly targetMs?: number;
     readonly targetFrames?: number;
@@ -289,12 +289,39 @@ export class MlCentre {
     readonly recordMode?: 'word' | 'sentence';
     readonly languageId?: string;
   }): Promise<{ ok: true } | { ok: false; reason: string }> {
-    const info = this.deps.gloveInfo(input.side);
-    if (!info.connected) {
-      return {
-        ok: false,
-        reason: `No glove is connected on the ${input.side} hand, so there is nothing to record from. Connect a glove, or switch on Demo Mode for that hand.`,
-      };
+    let source: SampleSource = 'simulated';
+    let deviceLabel = 'Both Gloves (Left + Right)';
+    let calibrationVersion: number | null = null;
+
+    if (input.side === 'both') {
+      const leftInfo = this.deps.gloveInfo('left');
+      const rightInfo = this.deps.gloveInfo('right');
+      if (!leftInfo.connected || !rightInfo.connected) {
+        const missing =
+          !leftInfo.connected && !rightInfo.connected
+            ? 'both the Left and Right gloves'
+            : !leftInfo.connected
+            ? 'the Left glove'
+            : 'the Right glove';
+        return {
+          ok: false,
+          reason: `Please connect ${missing} to record dual-hand gestures, or select a single glove.`,
+        };
+      }
+      deviceLabel = `Left: ${leftInfo.transportName} | Right: ${rightInfo.transportName}`;
+      source = leftInfo.real && rightInfo.real ? 'glove' : 'simulated';
+      calibrationVersion = rightInfo.calibrationVersion ?? leftInfo.calibrationVersion;
+    } else {
+      const info = this.deps.gloveInfo(input.side);
+      if (!info.connected) {
+        return {
+          ok: false,
+          reason: `No glove is connected on the ${input.side} hand, so there is nothing to record from. Connect a glove, or switch on Demo Mode for that hand.`,
+        };
+      }
+      source = sourceFor(info);
+      deviceLabel = info.transportName;
+      calibrationVersion = info.calibrationVersion;
     }
 
     const context = this.store.getSnapshot();
@@ -306,10 +333,10 @@ export class MlCentre {
     const session: StartSessionInput = {
       languageId,
       modality: 'glove-sensor',
-      source: sourceFor(info),
+      source,
       side: input.side,
-      deviceLabel: info.transportName,
-      calibrationVersion: info.calibrationVersion,
+      deviceLabel,
+      calibrationVersion,
       handContext: input.handContext,
       targetMs: input.targetMs,
       targetFrames: input.targetFrames,

@@ -30,7 +30,7 @@ import { FEATURE_SPEC, predict, type Prediction } from './classifier';
 import { extractFeatures } from './features';
 import { buildWindow } from './window';
 import { WINDOW_FRAMES, type FrameVector, type LabelDefinition, type MlSettings, type ModelRecord } from './types';
-import type { SensorSample } from '../sensors/types';
+import type { GloveSide, SensorSample } from '../sensors/types';
 
 /** Why the app is not naming a sign. */
 export type UnknownReason =
@@ -256,7 +256,11 @@ const DEFAULT_STALE_MS = 2500;
  * reported as stopped rather than re-evaluating the same frames forever.
  */
 export class LiveInference {
-  private buffer: SensorSample[] = [];
+  private buffers: Record<GloveSide, SensorSample[]> = { left: [], right: [] };
+  private outcomes: Record<GloveSide, InferenceOutcome> = {
+    left: unknown('no-model', 'No recognition model has been trained on this phone yet.'),
+    right: unknown('no-model', 'No recognition model has been trained on this phone yet.'),
+  };
   private outcome: InferenceOutcome;
   private receiving = false;
   private lastFrameAtMs = 0;
@@ -270,53 +274,59 @@ export class LiveInference {
 
   getSnapshot = (): InferenceState => ({
     outcome: this.outcome,
-    buffered: this.buffer.length,
+    buffered: Math.max(this.buffers.left.length, this.buffers.right.length),
     receiving: this.receiving && !this.expired(),
   });
 
-  /** Adds one sample to the buffer and re-evaluates. */
+  /** Returns side-specific outcome for evaluating individual hands. */
+  getSideOutcome(side: GloveSide): InferenceOutcome {
+    return this.outcomes[side];
+  }
+
+  /** Adds one sample to the side's buffer and re-evaluates. */
   push(sample: SensorSample, context: Omit<InferInput, 'frames'>): void {
     if (this.disposed) return;
 
     this.lastFrameAtMs = this.deps.now();
     this.receiving = true;
 
-    // A hand swap mid-buffer would mix two gloves' frames into one window.
-    const sameSide = this.buffer.length > 0 && this.buffer[0]!.side === sample.side;
-    this.buffer = [...(sameSide ? this.buffer : []), sample].slice(-WINDOW_FRAMES * 2);
+    const side = sample.side;
+    this.buffers[side] = [...this.buffers[side], sample].slice(-WINDOW_FRAMES * 2);
 
-    this.outcome = this.evaluate(context);
+    this.outcomes[side] = this.evaluateForSide(side, context);
+    this.outcome = this.selectBestOutcome(this.outcomes.left, this.outcomes.right);
     this.deps.onUpdate?.();
   }
 
   /** Clears the buffer, e.g. when the glove disconnects. */
   reset(context: Omit<InferInput, 'frames'>): void {
-    this.buffer = [];
+    this.buffers = { left: [], right: [] };
     this.receiving = false;
     this.lastFrameAtMs = 0;
-    this.outcome = this.evaluate(context);
+    this.outcomes = {
+      left: this.evaluateForSide('left', context),
+      right: this.evaluateForSide('right', context),
+    };
+    this.outcome = this.selectBestOutcome(this.outcomes.left, this.outcomes.right);
     this.deps.onUpdate?.();
   }
 
   /** Re-evaluates against a model that has just been activated or withdrawn. */
   refresh(context: Omit<InferInput, 'frames'>): void {
-    this.outcome = this.evaluate(context);
+    this.outcomes = {
+      left: this.evaluateForSide('left', context),
+      right: this.evaluateForSide('right', context),
+    };
+    this.outcome = this.selectBestOutcome(this.outcomes.left, this.outcomes.right);
     this.deps.onUpdate?.();
   }
 
   dispose(): void {
     this.disposed = true;
-    this.buffer = [];
+    this.buffers = { left: [], right: [] };
   }
 
-  /**
-   * Evaluates the held frames.
-   *
-   * A stopped stream says so instead of showing the last reading as current: a
-   * frozen "sign" on screen looks exactly like a recognised sign, and the person
-   * reading it has no way to tell the difference.
-   */
-  private evaluate(context: Omit<InferInput, 'frames'>): InferenceOutcome {
+  private evaluateForSide(side: GloveSide, context: Omit<InferInput, 'frames'>): InferenceOutcome {
     if (this.expired()) {
       return {
         kind: 'unknown',
@@ -328,7 +338,12 @@ export class LiveInference {
       };
     }
 
-    const built = buildWindow(this.buffer, { frames: WINDOW_FRAMES, maxGapMs: 1500 });
+    const sideBuffer = this.buffers[side];
+    if (sideBuffer.length === 0) {
+      return unknown('collecting', 'Waiting for glove data.');
+    }
+
+    const built = buildWindow(sideBuffer, { frames: WINDOW_FRAMES, maxGapMs: 1500 });
     if (!built.ok) {
       return {
         kind: 'unknown',
@@ -341,6 +356,26 @@ export class LiveInference {
     }
 
     return inferFromFrames({ frames: built.frames, ...context });
+  }
+
+  private selectBestOutcome(left: InferenceOutcome, right: InferenceOutcome): InferenceOutcome {
+    // 1. Both recognized as signs: pick the highest score
+    if (left.kind === 'sign' && right.kind === 'sign') {
+      return left.label.score >= right.label.score ? left : right;
+    }
+    // 2. One is a sign, the other isn't: pick the sign
+    if (left.kind === 'sign') return left;
+    if (right.kind === 'sign') return right;
+
+    // 3. One is unknown with nearest guess: pick the higher nearest score
+    const leftScore = (left.kind === 'unknown' && left.nearest) ? left.nearest.score : 0;
+    const rightScore = (right.kind === 'unknown' && right.nearest) ? right.nearest.score : 0;
+    if (leftScore > 0 || rightScore > 0) {
+      return leftScore >= rightScore ? left : right;
+    }
+
+    // 4. Default to right if has buffer, else left
+    return this.buffers.right.length >= this.buffers.left.length ? right : left;
   }
 
   private expired(): boolean {

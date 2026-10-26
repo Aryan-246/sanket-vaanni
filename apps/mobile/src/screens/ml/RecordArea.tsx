@@ -72,7 +72,8 @@ const LANGUAGES: readonly { value: string; label: string }[] = [
   { value: 'bsl', label: 'BSL (British Sign Language)' },
 ];
 
-const SIDES: readonly { value: GloveSide; label: string }[] = [
+const SIDES: readonly { value: GloveSide | 'both'; label: string }[] = [
+  { value: 'both', label: 'Both Gloves (Dual)' },
   { value: 'right', label: 'Right glove' },
   { value: 'left', label: 'Left glove' },
 ];
@@ -95,7 +96,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const state = snapshot.capture;
 
   const [recordMode, setRecordMode] = useState<'word' | 'sentence'>('word');
-  const [side, setSide] = useState<GloveSide>('right');
+  const [side, setSide] = useState<GloveSide | 'both'>('both');
   const [handContext, setHandContext] = useState<HandContext>('right');
   const [sentenceFramesStr, setSentenceFramesStr] = useState<'50' | '100' | '250' | '500'>('100');
   const [sentenceIntervalStr, setSentenceIntervalStr] = useState<'200' | '500' | '1000'>('500');
@@ -126,9 +127,11 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
     const targetFrames = recordMode === 'word' ? 250 : Number(sentenceFramesStr);
     const sampleIntervalMs = recordMode === 'word' ? 500 : Number(sentenceIntervalStr);
     const targetMs = targetFrames * sampleIntervalMs;
+    const computedHandContext: HandContext =
+      side === 'both' ? 'both' : (recordMode === 'word' ? side : handContext);
     const outcome = await ml.beginCapture({
-      side: recordMode === 'word' ? 'right' : side,
-      handContext: recordMode === 'word' ? 'right' : handContext,
+      side,
+      handContext: computedHandContext,
       targetMs,
       targetFrames,
       sampleIntervalMs,
@@ -211,7 +214,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
 
             {recordMode === 'word' ? (
               <NoteCard tone="muted">
-                Word Mode: Exactly 250 frames at 0.5s detection interval using the Right Hand Glove. Appends into the dataset (right_glove_dataset.csv).
+                Word Mode: Exactly 250 frames at 0.5s detection interval. Works with Both Gloves (dual-hand words) or individual Right / Left glove words.
               </NoteCard>
             ) : (
               <View style={styles.stack}>
@@ -263,7 +266,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
             </AppText>
 
             <ActionButton
-              label={recordMode === 'word' ? 'Start a session (250 frames · 0.5s · Right Glove)' : 'Start a session (Sentence)'}
+              label={`Start a session (${recordMode === 'word' ? 'Word · 250 frames · ' : ''}${side === 'both' ? 'Both Gloves' : side === 'left' ? 'Left Glove' : 'Right Glove'})`}
               icon="plus"
               onPress={() => {
                 void start();
@@ -277,7 +280,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
             <Row>
               <View style={styles.headRow}>
                 <AppText variant="label" style={styles.grow}>
-                  Recording from {session.deviceLabel ?? 'Right Glove'} ({state.recordMode === 'word' ? 'Word · 250 frames' : `Sentence · ${state.targetFrames} frames`})
+                  Recording from {session.deviceLabel ?? (side === 'both' ? 'Both Gloves' : side === 'left' ? 'Left Glove' : 'Right Glove')} ({state.recordMode === 'word' ? 'Word · 250 frames' : `Sentence · ${state.targetFrames} frames`})
                 </AppText>
                 <AppText variant="caption" color={palette.textMuted}>
                   {SOURCE_LABEL[session.source]}
@@ -393,7 +396,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               </AppText>
             </View>
             <AppText variant="caption" color={palette.textSecondary}>
-              Hold or perform the sign with the {side === 'left' ? 'Left' : 'Right'} glove. Capturing {state.targetFrames || 250} frames at {(state.sampleIntervalMs / 1000).toFixed(1)}s intervals for maximum ML accuracy.
+              Hold or perform the sign with {side === 'both' ? 'both gloves' : side === 'left' ? 'the Left glove' : 'the Right glove'}. Capturing {state.targetFrames || 250} frames at {(state.sampleIntervalMs / 1000).toFixed(1)}s intervals for maximum ML accuracy.
             </AppText>
 
             <Meter
@@ -403,7 +406,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               unknown="Waiting for the first reading."
             />
             <AppText variant="caption" color={palette.textMuted}>
-              {state.frames} frame{state.frames === 1 ? '' : 's'} recorded at {(state.sampleIntervalMs / 1000).toFixed(1)}s per frame. Real Right Glove BLE stream.
+              {state.frames} frame{state.frames === 1 ? '' : 's'} recorded at {(state.sampleIntervalMs / 1000).toFixed(1)}s per frame. {side === 'both' ? 'Dual Glove stream (Left + Right).' : `${side === 'left' ? 'Left' : 'Right'} Glove BLE stream.`}
             </AppText>
             <View style={styles.buttonRow}>
               <ActionButton
@@ -437,7 +440,9 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               <NoteCard tone="warning">{state.qualityNote}</NoteCard>
             ) : (
               <AppText variant="caption" color={palette.textMuted}>
-                {state.pending === null
+                {state.pendingDual
+                  ? `${state.pendingDual.left.quality.frameCount} Left & ${state.pendingDual.right.quality.frameCount} Right readings across ${(state.targetMs / 1000).toFixed(1)} seconds, each resampled to 30 frames.`
+                  : state.pending === null
                   ? 'The window was built.'
                   : `${state.pending.quality.frameCount} readings across ${(state.targetMs / 1000).toFixed(1)} seconds, resampled to 30 frames.`}
               </AppText>

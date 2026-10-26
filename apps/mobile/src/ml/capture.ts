@@ -106,6 +106,7 @@ export interface CaptureState {
   /** Mode: 'word' or 'sentence'. */
   readonly recordMode: 'word' | 'sentence';
   readonly pending: PendingWindow | null;
+  readonly pendingDual?: { left: PendingWindow; right: PendingWindow } | null;
   /** What the last saved window was, so the screen can confirm it. */
   readonly lastSaved: { readonly sampleId: string; readonly labelId: string; readonly atMs: number } | null;
   /** A sentence about the current window's signal, or null. */
@@ -150,14 +151,9 @@ export interface StartSessionInput {
   readonly modality: Modality;
   readonly source: SampleSource;
   /**
-   * Which glove this session records from.
-   *
-   * Required, and enforced against every frame. A session that accepted frames
-   * from both hands would build windows out of two gloves' readings, and nothing
-   * downstream could tell that had happened. The two transports are separate
-   * controllers, so the caller always knows which one it is recording.
+   * Which glove this session records from. Supports 'left', 'right', or 'both'.
    */
-  readonly side: GloveSide;
+  readonly side: GloveSide | 'both';
   /** The transport's own name, e.g. `Demo Mode (simulated)`. */
   readonly deviceLabel: string | null;
   readonly calibrationVersion: number | null;
@@ -179,9 +175,11 @@ export class CaptureController {
   private readonly deps: CaptureDeps;
   private state: CaptureState;
   private collected: SensorSample[] = [];
+  private collectedBySide: Record<GloveSide, SensorSample[]> = { left: [], right: [] };
+  private lastSampleTimestamps: Record<GloveSide, number> = { left: 0, right: 0 };
   private lastSampleTimestampMs = 0;
   /** The glove this session records from, set when the session opens. */
-  private side: GloveSide | null = null;
+  private side: GloveSide | 'both' | null = null;
   /** The hand the caller said the person is signing with. */
   private handContext: HandContext = 'right';
 
@@ -198,6 +196,7 @@ export class CaptureController {
       sampleIntervalMs: 500,
       recordMode: 'word',
       pending: null,
+      pendingDual: null,
       lastSaved: null,
       qualityNote: null,
       error: null,
@@ -237,6 +236,8 @@ export class CaptureController {
     const targetMs = input.targetMs ?? (targetFrames > 0 && sampleIntervalMs > 0 ? targetFrames * sampleIntervalMs : 5000);
 
     this.collected = [];
+    this.collectedBySide = { left: [], right: [] };
+    this.lastSampleTimestamps = { left: 0, right: 0 };
     this.lastSampleTimestampMs = 0;
     this.state = {
       ...this.state,
@@ -249,6 +250,7 @@ export class CaptureController {
       sampleIntervalMs,
       recordMode,
       pending: null,
+      pendingDual: null,
       qualityNote: null,
       error: null,
     };
@@ -281,6 +283,8 @@ export class CaptureController {
     }
 
     this.collected = [];
+    this.collectedBySide = { left: [], right: [] };
+    this.lastSampleTimestamps = { left: 0, right: 0 };
     this.lastSampleTimestampMs = 0;
     this.state = {
       ...this.state,
@@ -288,6 +292,8 @@ export class CaptureController {
       frames: 0,
       framesNeeded: 0,
       elapsedMs: 0,
+      pending: null,
+      pendingDual: null,
       qualityNote: null,
       error: null,
     };
@@ -303,30 +309,37 @@ export class CaptureController {
   pushFrame(sample: SensorSample): boolean {
     if (this.state.phase !== 'recording' || this.state.session === null) return false;
 
-    // Filter by side
-    if (this.side !== null && sample.side !== this.side) return false;
+    // Filter by side if not recording from both gloves
+    if (this.side !== 'both' && this.side !== null && sample.side !== this.side) return false;
 
-    // Throttle by sampleIntervalMs if configured (e.g. 0.5s interval)
-    if (this.state.sampleIntervalMs > 0 && this.lastSampleTimestampMs > 0) {
-      if (sample.timestampMs - this.lastSampleTimestampMs < Math.max(50, this.state.sampleIntervalMs - 35)) {
+    // Throttle per side by sampleIntervalMs if configured (e.g. 0.5s interval)
+    const lastSideTs = this.lastSampleTimestamps[sample.side];
+    if (this.state.sampleIntervalMs > 0 && lastSideTs > 0) {
+      if (sample.timestampMs - lastSideTs < Math.max(50, this.state.sampleIntervalMs - 35)) {
         return false;
       }
     }
-    this.lastSampleTimestampMs = sample.timestampMs;
+    this.lastSampleTimestamps[sample.side] = sample.timestampMs;
 
+    this.collectedBySide[sample.side].push(sample);
     this.collected.push(sample);
+
+    const primaryCount = this.side === 'both'
+      ? Math.max(this.collectedBySide.left.length, this.collectedBySide.right.length)
+      : this.collectedBySide[sample.side].length;
+
     const first = this.collected[0]!;
     const elapsedMs = sample.timestampMs - first.timestampMs;
 
     this.state = {
       ...this.state,
-      frames: this.collected.length,
+      frames: primaryCount,
       elapsedMs: Math.max(0, elapsedMs),
     };
     this.emit();
 
     const reachedTarget =
-      (this.state.targetFrames > 0 && this.collected.length >= this.state.targetFrames) ||
+      (this.state.targetFrames > 0 && primaryCount >= this.state.targetFrames) ||
       (this.state.targetMs > 0 && elapsedMs >= this.state.targetMs);
 
     if (reachedTarget) {
@@ -344,15 +357,92 @@ export class CaptureController {
 
     const session = this.state.session;
     const maxGap = Math.max(MAX_GAP_MS, (this.state.sampleIntervalMs || 500) * 3);
-    const built = buildWindow(this.collected, { frames: WINDOW_FRAMES, maxGapMs: maxGap });
+
+    if (this.side === 'both') {
+      const leftBuilt = buildWindow(this.collectedBySide.left, { frames: WINDOW_FRAMES, maxGapMs: maxGap });
+      const rightBuilt = buildWindow(this.collectedBySide.right, { frames: WINDOW_FRAMES, maxGapMs: maxGap });
+
+      const rightOk = rightBuilt.ok;
+      const leftOk = leftBuilt.ok;
+
+      if (!rightOk && !leftOk) {
+        this.collected = [];
+        this.collectedBySide = { left: [], right: [] };
+        this.state = {
+          ...this.state,
+          phase: 'ready',
+          frames: 0,
+          elapsedMs: 0,
+          pending: null,
+          pendingDual: null,
+          error: (!rightBuilt.ok ? rightBuilt.reason : '') || (!leftBuilt.ok ? leftBuilt.reason : 'No valid frames captured.'),
+        };
+        this.emit();
+        return;
+      }
+
+      const nowMs = this.deps.now();
+      const pRight: PendingWindow | null = rightOk && rightBuilt.ok ? {
+        sessionId: session.id,
+        side: 'right',
+        handContext: 'both',
+        source: session.source,
+        languageId: session.languageId,
+        frames: rightBuilt.frames,
+        quality: rightBuilt.quality,
+        capturedAtMs: nowMs,
+        calibrationVersion: session.calibrationVersion,
+        sourceHz: 20,
+        replacingSampleId: null,
+      } : null;
+
+      const pLeft: PendingWindow | null = leftOk && leftBuilt.ok ? {
+        sessionId: session.id,
+        side: 'left',
+        handContext: 'both',
+        source: session.source,
+        languageId: session.languageId,
+        frames: leftBuilt.frames,
+        quality: leftBuilt.quality,
+        capturedAtMs: nowMs,
+        calibrationVersion: session.calibrationVersion,
+        sourceHz: 20,
+        replacingSampleId: null,
+      } : null;
+
+      const primary = pRight ?? pLeft!;
+      this.collected = [];
+      this.collectedBySide = { left: [], right: [] };
+
+      this.state = {
+        ...this.state,
+        phase: 'awaiting-label',
+        frames: primary.quality.frameCount,
+        elapsedMs: 0,
+        pending: primary,
+        pendingDual: pRight && pLeft ? { left: pLeft, right: pRight } : null,
+        qualityNote: qualityNote(primary.quality),
+        error: null,
+      };
+      this.emit();
+      await this.deps.sink.putPendingWindow(primary);
+      return;
+    }
+
+    const sideSamples = this.side === 'left' ? this.collectedBySide.left : this.collectedBySide.right;
+    const samplesToBuild = sideSamples.length > 0 ? sideSamples : this.collected;
+    const built = buildWindow(samplesToBuild, { frames: WINDOW_FRAMES, maxGapMs: maxGap });
 
     if (!built.ok) {
       this.collected = [];
+      this.collectedBySide = { left: [], right: [] };
       this.state = {
         ...this.state,
         phase: 'ready',
         frames: 0,
         elapsedMs: 0,
+        pending: null,
+        pendingDual: null,
         error: built.reason,
       };
       this.emit();
@@ -369,17 +459,19 @@ export class CaptureController {
       quality: built.quality,
       capturedAtMs: this.deps.now(),
       calibrationVersion: session.calibrationVersion,
-      sourceHz: estimateHz(this.collected),
+      sourceHz: estimateHz(samplesToBuild),
       replacingSampleId: null,
     };
 
     this.collected = [];
+    this.collectedBySide = { left: [], right: [] };
     this.state = {
       ...this.state,
       phase: 'awaiting-label',
       frames: built.quality.frameCount,
       elapsedMs: 0,
       pending,
+      pendingDual: null,
       qualityNote: qualityNote(built.quality),
       error: null,
     };
@@ -391,12 +483,10 @@ export class CaptureController {
 
   /**
    * Abandons the window in progress, or the one awaiting a label.
-   *
-   * A partial recording is discarded, never padded. The pending window is
-   * cleared from storage, because a window nobody will label is not data.
    */
   async cancel(): Promise<void> {
     this.collected = [];
+    this.collectedBySide = { left: [], right: [] };
 
     if (this.state.phase === 'awaiting-label' || this.state.pending !== null) {
       await this.deps.sink.putPendingWindow(null);
@@ -408,6 +498,7 @@ export class CaptureController {
       frames: 0,
       elapsedMs: 0,
       pending: null,
+      pendingDual: null,
       qualityNote: null,
       error: null,
     };
@@ -416,10 +507,6 @@ export class CaptureController {
 
   /**
    * Confirms which sign the pending window is, and saves it.
-   *
-   * `labelId === null` saves it as **pending**, not as a labelled example. That
-   * is what "I am not sure what I just did" looks like: the motion is kept, it
-   * appears in the library as unconfirmed, and the trainer will not touch it.
    */
   async confirm(labelId: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
     const pending = this.state.pending;
@@ -428,25 +515,114 @@ export class CaptureController {
     }
 
     const session = this.state.session;
-    const sampleId = pending.replacingSampleId ?? this.deps.newId();
     const atMs = this.deps.now();
     const labelIdForRecord = labelId ?? UNCONFIRMED_LABEL_ID;
 
+    // Dual-glove capture: save both Left and Right samples
+    if (this.state.pendingDual) {
+      const { left, right } = this.state.pendingDual;
+      const sampleRight: SensorWindowSample = {
+        id: this.deps.newId(),
+        sessionId: right.sessionId,
+        ownerId: this.deps.currentOwnerId?.() ?? null,
+        languageId: right.languageId,
+        labelId: labelIdForRecord,
+        modality: 'glove-sensor',
+        source: right.source,
+        handContext: 'both',
+        approval: labelId === null ? 'pending' : 'approved',
+        quality: right.quality,
+        capturedAtMs: right.capturedAtMs,
+        calibrationVersion: right.calibrationVersion,
+        preprocessingVersion: PREPROCESSING_VERSION,
+        datasetVersion: DATASET_VERSION,
+        fingerprint: windowFingerprint({
+          languageId: right.languageId,
+          labelId: labelIdForRecord,
+          side: 'right',
+          source: right.source,
+          handContext: 'both',
+          frames: right.frames,
+        }),
+        rejectionReason: null,
+        side: 'right',
+        frames: right.frames,
+        sourceHz: right.sourceHz,
+      };
+
+      const sampleLeft: SensorWindowSample = {
+        id: this.deps.newId(),
+        sessionId: left.sessionId,
+        ownerId: this.deps.currentOwnerId?.() ?? null,
+        languageId: left.languageId,
+        labelId: labelIdForRecord,
+        modality: 'glove-sensor',
+        source: left.source,
+        handContext: 'both',
+        approval: labelId === null ? 'pending' : 'approved',
+        quality: left.quality,
+        capturedAtMs: left.capturedAtMs,
+        calibrationVersion: left.calibrationVersion,
+        preprocessingVersion: PREPROCESSING_VERSION,
+        datasetVersion: DATASET_VERSION,
+        fingerprint: windowFingerprint({
+          languageId: left.languageId,
+          labelId: labelIdForRecord,
+          side: 'left',
+          source: left.source,
+          handContext: 'both',
+          frames: left.frames,
+        }),
+        rejectionReason: null,
+        side: 'left',
+        frames: left.frames,
+        sourceHz: left.sourceHz,
+      };
+
+      this.state = { ...this.state, phase: 'saving', error: null };
+      this.emit();
+
+      try {
+        await this.deps.sink.saveSample(sampleRight);
+        await this.deps.sink.saveSample(sampleLeft);
+        await this.deps.sink.putPendingWindow(null);
+
+        const updated: CaptureSessionMeta = {
+          ...session,
+          sampleCount: session.sampleCount + 2,
+        };
+        await this.deps.sink.saveSession(updated);
+
+        this.collected = [];
+        this.collectedBySide = { left: [], right: [] };
+        this.state = {
+          ...this.state,
+          phase: 'ready',
+          session: updated,
+          frames: 0,
+          elapsedMs: 0,
+          pending: null,
+          pendingDual: null,
+          lastSaved: { sampleId: sampleRight.id, labelId: labelIdForRecord, atMs },
+          qualityNote: null,
+          error: null,
+        };
+        this.emit();
+        return { ok: true };
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err.message : 'Storage write failed';
+        this.state = { ...this.state, phase: 'awaiting-label', error: `Could not save dual sample: ${error}` };
+        this.emit();
+        return { ok: false, reason: error };
+      }
+    }
+
+    const sampleId = pending.replacingSampleId ?? this.deps.newId();
     const sample: SensorWindowSample = {
       id: sampleId,
       sessionId: pending.sessionId,
-      /*
-       * Stamped from the account as it stands at this instant. It used to be a
-       * hard-coded null, which meant every recording — including one made by a
-       * signed-in account — was stored as belonging to nobody. Nothing read the
-       * field, so nothing failed; but a sample that cannot say whose it is cannot
-       * be exported, synchronised or deleted on an owner's behalf later, and the
-       * window to fix that is before the data exists rather than after.
-       */
       ownerId: this.deps.currentOwnerId?.() ?? null,
       languageId: pending.languageId,
-      // A pending save keeps the id it was given, but is not approved — the
-      // approval state is what stops it being trained on, not a fake label.
       labelId: labelIdForRecord,
       modality: 'glove-sensor',
       source: pending.source,
@@ -482,18 +658,19 @@ export class CaptureController {
         sampleCount: session.sampleCount + 1,
       };
 
+      this.collected = [];
+      this.collectedBySide = { left: [], right: [] };
       this.state = {
         ...this.state,
         phase: 'ready',
         session: updated,
         pending: null,
+        pendingDual: null,
         qualityNote: null,
         lastSaved: { sampleId: sample.id, labelId: sample.labelId, atMs },
       };
       this.emit();
 
-      // The count is written with the window, so the session record cannot claim
-      // more windows than were actually stored.
       await this.deps.sink.putPendingWindow(null);
       await this.deps.sink.saveSession(updated);
       return { ok: true };

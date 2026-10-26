@@ -31,15 +31,26 @@ export class MlRecogniser implements Recogniser {
     return 'No recognition model is currently active. Go to Settings > ML Studio to capture gestures and train a model.';
   }
 
-  recognise(_input: RecognitionInput): RecognitionResult | null {
+  recognise(input: RecognitionInput): RecognitionResult | null {
     if (!this.isAvailable) return null;
 
-    const outcome = this.ml.getSnapshot().inference.outcome;
+    let outcome = input.kind === 'single'
+      ? this.ml.inference.getSideOutcome(input.side)
+      : this.ml.getSnapshot().inference.outcome;
+
     let targetLabel: { labelId: string; text: string; score: number } | null = null;
     if (outcome.kind === 'sign') {
       targetLabel = outcome.label;
     } else if (outcome.kind === 'unknown' && outcome.nearest && outcome.nearest.score >= 0.35) {
       targetLabel = outcome.nearest;
+    }
+
+    // Fallback to overall best outcome if this specific hand is still collecting or neutral
+    if (!targetLabel) {
+      const overall = this.ml.getSnapshot().inference.outcome;
+      if (overall.kind === 'sign') {
+        targetLabel = overall.label;
+      }
     }
 
     if (!targetLabel) {

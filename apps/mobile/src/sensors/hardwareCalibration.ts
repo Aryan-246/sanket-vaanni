@@ -192,7 +192,6 @@ export function validateCalibrationDataset(
   const finalRest = steps[6];
 
   const channels: ChannelValidation[] = [];
-  let allEssentialValid = true;
   let repeatabilityPassed = true;
 
   for (let ch = 0; ch < FLEX_CHANNEL_COUNT; ch++) {
@@ -217,7 +216,6 @@ export function validateCalibrationDataset(
     if (restInitial <= GROUND_THRESHOLD && fullFlex <= GROUND_THRESHOLD) {
       status = 'failed';
       issue = 'Disconnected / 0V ground (check sensor socket & divider)';
-      allEssentialValid = false;
     } else if (absSpan < MIN_USABLE_SPAN) {
       status = 'warning';
       issue = `Small dynamic range (${absSpan} counts < ${MIN_USABLE_SPAN})`;

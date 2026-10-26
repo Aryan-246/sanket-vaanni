@@ -93,6 +93,7 @@ export function DashboardScreen({
   onOpenTextboard,
   onOpenMl,
 }: DashboardScreenProps): React.JSX.Element {
+  const { palette } = useTheme();
   const styles = useStyles(makeStyles);
   const {
     preferences,
@@ -157,7 +158,7 @@ export function DashboardScreen({
   const detectedText = useMemo(() => outcomeText(outcome), [outcome]);
 
   useEffect(() => {
-    if (outcome.kind === 'result' && outcome.candidate.label) {
+    if (outcome.kind === 'result' && outcome.candidate && typeof outcome.candidate.label === 'string') {
       const word = outcome.candidate.label.toUpperCase();
       if (word !== 'REST' && word !== lastCelebratedWord.current) {
         lastCelebratedWord.current = word;
@@ -165,7 +166,10 @@ export function DashboardScreen({
         const timer = setTimeout(() => setCelebrating(false), 2400);
         return () => clearTimeout(timer);
       }
-    } else if (outcome.kind === 'idle' || (outcome.kind === 'result' && outcome.candidate.label?.toUpperCase() === 'REST')) {
+    } else if (
+      outcome.kind === 'idle' ||
+      (outcome.kind === 'result' && outcome.candidate?.label?.toUpperCase() === 'REST')
+    ) {
       lastCelebratedWord.current = null;
     }
   }, [outcome]);
@@ -794,7 +798,7 @@ const makeStyles = (palette: Palette) =>
       justifyContent: 'center',
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.md,
-      backgroundColor: palette.card,
+      backgroundColor: palette.surface,
       borderColor: palette.success,
       borderWidth: 1,
       borderRadius: radii.md,

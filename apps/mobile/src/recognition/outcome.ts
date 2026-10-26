@@ -193,7 +193,9 @@ function collectCandidates(
 
 /** True when there is text worth offering to speak or translate. */
 export function outcomeText(outcome: RecognitionOutcome): string | null {
-  return outcome.kind === 'result' ? outcome.candidate.label : null;
+  return outcome.kind === 'result' && outcome.candidate && typeof outcome.candidate.label === 'string'
+    ? outcome.candidate.label
+    : null;
 }
 
 /**

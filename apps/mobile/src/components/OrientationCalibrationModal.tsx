@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Modal,
   Pressable,
   ScrollView,
@@ -25,7 +24,7 @@ import {
 } from '../sensors/orientationCalibration';
 import { useStyles, useTheme } from '../theme/ThemeProvider';
 import type { Palette } from '../theme/palette';
-import { layout, radii, spacing } from '../theme';
+import { radii, spacing } from '../theme';
 
 export interface OrientationCalibrationModalProps {
   visible: boolean;
@@ -40,11 +39,11 @@ export interface OrientationCalibrationModalProps {
 export function OrientationCalibrationModal({
   visible,
   gloves,
-  currentProfile,
+  currentProfile: _currentProfile,
   initialSide = 'left',
   onClose,
   onSaveProfile,
-  onRestoreDefaults,
+  onRestoreDefaults: _onRestoreDefaults,
 }: OrientationCalibrationModalProps): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();

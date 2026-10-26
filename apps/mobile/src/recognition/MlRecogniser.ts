@@ -5,7 +5,7 @@
  * When no model is active, isAvailable reports false honestly.
  * Confidence reported is the authentic calibrated score from the fitted softmax model.
  */
-import type { Recogniser, RecognitionCandidate, RecognitionResult } from './index';
+import type { Recogniser, RecognitionResult } from './index';
 import type { RecognitionInput } from './input';
 import type { SignLanguageProfile } from './profiles';
 import type { MlCentre } from '../ml/centre';
@@ -29,7 +29,7 @@ export class MlRecogniser implements Recogniser {
     return 'No recognition model is currently active. Go to Settings > ML Studio to capture gestures and train a model.';
   }
 
-  recognise(input: RecognitionInput): RecognitionResult | null {
+  recognise(_input: RecognitionInput): RecognitionResult | null {
     if (!this.isAvailable) return null;
 
     const outcome = this.ml.getSnapshot().inference.outcome;

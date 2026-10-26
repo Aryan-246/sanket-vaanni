@@ -20,10 +20,8 @@ import {
   isCompatibleGloveDevice,
   inferSideFromDevice,
   SERVICE_UUID,
-  DATA_UUID,
-  CONTROL_UUID,
 } from '../src/ble/bleTransport';
-import { GloveController, PACKET_STALE_MS, type GloveSnapshot } from '../src/ble/controller';
+import { GloveController, PACKET_STALE_MS } from '../src/ble/controller';
 import { linkReducer, INITIAL_LINK, isLinkLive } from '../src/ble/link';
 import type { DiscoveredGlove, GloveSide, GloveTransport, TransportStatus, Unsubscribe } from '../src/ble/types';
 import type { RawSample } from '../src/sensors/types';

@@ -20,7 +20,7 @@ import {
   type StepCaptureResult,
 } from '../src/sensors/hardwareCalibration';
 import { createHardwareDefaultCalibration } from '../src/sensors/calibration';
-import { normalizeAngleDifference, tiltFromAccelerometer, createPoseMapper, RESTING_POSE } from '../src/hands/pose';
+import { normalizeAngleDifference, tiltFromAccelerometer, createPoseMapper } from '../src/hands/pose';
 import type { RawSample } from '../src/sensors/types';
 
 function createMockSample(flex: [number, number, number, number, number], pitch = 0, roll = Math.PI): RawSample {

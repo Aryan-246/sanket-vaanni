@@ -15,7 +15,7 @@ import { DEFAULT_PREFERENCES } from './preferences';
 import { GloveController, type GloveSnapshot } from '../ble/controller';
 import { MockTransport } from '../ble/mockTransport';
 import type { GloveSide, GloveTransport, SuspendableTransport } from '../ble/types';
-import { DEFAULT_PROFILE_ID, findProfile, MlRecogniser, UnimplementedRecogniser } from '../recognition';
+import { DEFAULT_PROFILE_ID, findProfile, MlRecogniser } from '../recognition';
 import type { SignLanguageProfile } from '../recognition';
 import type { Recogniser } from '../recognition';
 import { planInput, type InputAvailability, type InputPlan } from '../recognition/input';
@@ -50,7 +50,7 @@ import type { PushState } from '../notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../api/client';
 import { createAsyncStorage, type Storage } from '../storage';
-import { DirectVocabularyTranslator, UnimplementedTranslator, type Translator } from '../translation';
+import { DirectVocabularyTranslator, type Translator } from '../translation';
 
 export interface AppStateValue {
   readonly storage: Storage;
@@ -419,7 +419,17 @@ export function AppStateProvider({
   }
   const ml = mlRef.current;
 
-  const recogniser = useMemo(() => new MlRecogniser(profile, ml), [profile, ml]);
+  const [mlTick, setMlTick] = useState(0);
+  useEffect(() => {
+    return ml.subscribe(() => {
+      setMlTick((t) => t + 1);
+    });
+  }, [ml]);
+
+  const recogniser = useMemo(() => {
+    if (mlTick < 0) return null as never;
+    return new MlRecogniser(profile, ml);
+  }, [profile, ml, mlTick]);
   /**
    * The device's own speech engine where one exists, otherwise a speaker that
    * says why it cannot speak. Chosen at runtime, because whether a phone can
@@ -666,8 +676,8 @@ export function AppStateProvider({
       push,
       ml,
       translator,
-      recognitionAvailable: recogniser.isAvailable,
-      recognitionUnavailableReason: recogniser.unavailableReason,
+      recognitionAvailable: mlTick >= 0 && recogniser.isAvailable,
+      recognitionUnavailableReason: mlTick >= 0 ? recogniser.unavailableReason : null,
     }),
     [
       activeStorage,
@@ -688,6 +698,7 @@ export function AppStateProvider({
       announcements,
       push,
       ml,
+      mlTick,
       translator,
     ],
   );

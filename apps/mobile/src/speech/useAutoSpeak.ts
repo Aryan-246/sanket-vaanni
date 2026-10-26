@@ -57,7 +57,7 @@ export function useAutoSpeak(
 
   useEffect(() => {
     if (!enabled) return;
-    if (text === null || text.length === 0 || text.toUpperCase() === 'REST') {
+    if (!text || typeof text !== 'string' || text.trim().length === 0 || text.toUpperCase() === 'REST') {
       requested.current = null;
       return;
     }

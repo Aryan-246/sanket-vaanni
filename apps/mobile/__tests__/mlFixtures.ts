@@ -44,7 +44,7 @@ export function makeRun(
   options: { readonly frames?: number; readonly hz?: number; readonly side?: GloveSide } = {},
 ): SensorSample[] {
   const peaks = FIXTURE_SIGN_PEAKS[signId] ?? FIXTURE_SIGN_PEAKS['sign-a']!;
-  const frames = options.frames ?? 40;
+  const frames = options.frames ?? 70;
   const hz = options.hz ?? 20;
   const side = options.side ?? 'right';
 

@@ -314,7 +314,7 @@ describe('recording a window', () => {
   /** Feeds one full-length run into the controller, finishing the window. */
   function record(controller: CaptureController, signId = 'sign-a'): void {
     controller.beginWindow();
-    for (const sample of makeRun(signId, 0, { frames: 40, hz: 20 })) {
+    for (const sample of makeRun(signId, 0, { frames: 70, hz: 20 })) {
       controller.pushFrame(sample);
     }
   }

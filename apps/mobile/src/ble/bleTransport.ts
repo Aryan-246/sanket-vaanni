@@ -19,9 +19,20 @@ import type { DiscoveredGlove, GloveSide, GloveTransport, TransportStatus, Unsub
 import type { RawSample } from '../sensors/types';
 
 // --- Firmware-verified constants ---
-export const SERVICE_UUID   = '8f2a1000-7d2b-4c9a-9c4e-6b1e2f000001';
-export const DATA_UUID      = '8f2a1001-7d2b-4c9a-9c4e-6b1e2f000001';
-export const CONTROL_UUID   = '8f2a1002-7d2b-4c9a-9c4e-6b1e2f000001';
+export const SERVICE_UUID    = '8f2a1000-7d2b-4c9a-9c4e-6b1e2f000001';
+export const DATA_UUID       = '8f2a1001-7d2b-4c9a-9c4e-6b1e2f000001';
+export const CONTROL_UUID    = '8f2a1002-7d2b-4c9a-9c4e-6b1e2f000001';
+export const PREDICTION_UUID = '8f2a1003-7d2b-4c9a-9c4e-6b1e2f000001';
+
+export interface BlePredictionPayload {
+  readonly v: number;
+  readonly glove: 'left' | 'right';
+  readonly model_v: string;
+  readonly label: string;
+  readonly status: 'valid' | 'unknown' | 'warming_up';
+  readonly score?: number;
+  readonly margin?: number;
+}
 
 const SCAN_TIMEOUT_MS = 8000;
 
@@ -106,6 +117,26 @@ function parseFirmwarePayload(raw: string): FirmwarePayload | null {
     return obj as unknown as FirmwarePayload;
   } catch {
     console.warn('[BLE] JSON parse error:', raw.slice(0, 120));
+    return null;
+  }
+}
+
+export function parseBlePredictionPayload(raw: string): BlePredictionPayload | null {
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof obj.label === 'string') {
+      return {
+        v: typeof obj.v === 'number' ? obj.v : 1,
+        glove: obj.glove === 'left' ? 'left' : 'right',
+        model_v: String(obj.model_v ?? '1.0.0'),
+        label: String(obj.label),
+        status: obj.status === 'valid' ? 'valid' : (obj.status === 'warming_up' ? 'warming_up' : 'unknown'),
+        score: typeof obj.score === 'number' ? obj.score : undefined,
+        margin: typeof obj.margin === 'number' ? obj.margin : undefined,
+      };
+    }
+    return null;
+  } catch {
     return null;
   }
 }
@@ -238,7 +269,10 @@ export class BleTransport implements GloveTransport {
 
   #device: Device | null = null;
   #notifySubscription: Subscription | null = null;
+  #predNotifySubscription: Subscription | null = null;
   #disconnectSubscription: Subscription | null = null;
+  #predictionListeners = new Set<(p: BlePredictionPayload) => void>();
+  #lastPrediction: BlePredictionPayload | null = null;
 
   constructor(manager?: BleManager, targetSide?: GloveSide) {
     if (manager && targetSide) {
@@ -269,6 +303,16 @@ export class BleTransport implements GloveTransport {
   subscribe(listener: (s: RawSample) => void): Unsubscribe {
     this.#sampleListeners.add(listener);
     return () => this.#sampleListeners.delete(listener);
+  }
+
+  onPrediction(listener: (p: BlePredictionPayload) => void): Unsubscribe {
+    this.#predictionListeners.add(listener);
+    if (this.#lastPrediction) listener(this.#lastPrediction);
+    return () => this.#predictionListeners.delete(listener);
+  }
+
+  getLastPrediction(): BlePredictionPayload | null {
+    return this.#lastPrediction;
   }
   async scan(): Promise<DiscoveredGlove[]> {
     if (!this.#isReal || !this.#manager) {
@@ -392,6 +436,32 @@ export class BleTransport implements GloveTransport {
         },
       );
 
+      // Monitor dedicated PREDICTION_UUID if exposed by firmware
+      const hasPred = characteristics.some((c) => c.uuid.toLowerCase() === PREDICTION_UUID.toLowerCase());
+      if (hasPred) {
+        this.#predNotifySubscription = device.monitorCharacteristicForService(
+          SERVICE_UUID,
+          PREDICTION_UUID,
+          (err, char) => {
+            if (err) {
+              console.warn('[BLE] Prediction notify error:', err.message);
+              return;
+            }
+            if (!char?.value) return;
+            try {
+              const raw = Buffer.from(char.value, 'base64').toString('utf-8');
+              const payload = parseBlePredictionPayload(raw);
+              if (payload) {
+                this.#lastPrediction = payload;
+                for (const l of this.#predictionListeners) l(payload);
+              }
+            } catch (e) {
+              console.warn('[BLE] Failed to parse prediction packet:', e);
+            }
+          },
+        );
+      }
+
       this.#setStatus({ kind: 'connected', side: this.#targetSide, deviceName: device.name ?? deviceId });
       console.log(`[BLE] Connected to ${device.name ?? deviceId} (${this.#targetSide})`);
     } catch (error) {
@@ -402,6 +472,7 @@ export class BleTransport implements GloveTransport {
   }
 
   async disconnect(): Promise<void> {
+    this.#lastPrediction = null;
     if (!this.#isReal) {
       this.#status = { kind: 'unavailable', reason: BLE_UNAVAILABLE_REASON };
       return;
@@ -451,8 +522,11 @@ export class BleTransport implements GloveTransport {
   #cleanUpSync(): void {
     this.#notifySubscription?.remove();
     this.#notifySubscription = null;
+    this.#predNotifySubscription?.remove();
+    this.#predNotifySubscription = null;
     this.#disconnectSubscription?.remove();
     this.#disconnectSubscription = null;
+    this.#lastPrediction = null;
   }
 
   async #waitForBleReady(timeoutMs = 5000): Promise<boolean> {
@@ -465,6 +539,15 @@ export class BleTransport implements GloveTransport {
         if (s === BleState.PoweredOn) { clearTimeout(timer); sub.remove(); resolve(true); }
       }, true);
     });
+  }
+
+  /** Testing helper to inject parsed predictions directly into listeners */
+  handlePredictionJsonForTesting(rawJson: string): void {
+    const payload = parseBlePredictionPayload(rawJson);
+    if (payload) {
+      this.#lastPrediction = payload;
+      for (const l of this.#predictionListeners) l(payload);
+    }
   }
 }
 

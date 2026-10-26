@@ -16,6 +16,7 @@
 #include <Preferences.h>
 #include <cstring>
 #include "SanketVaanni_StartupVideo.h"
+#include "SanketModel.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -52,7 +53,14 @@ float batteryVoltage=0, batteryPinVoltage=0;
 int batteryPercent=-1;
 bool batteryPlausible=false;
 bool bleConnected=false;
-unsigned long sensorTimer=0, displayTimer=0, batteryTimer=0, bleTimer=0, pageTimer=0;
+unsigned long sensorTimer=0, displayTimer=0, batteryTimer=0, bleTimer=0, predictionTimer=0, pageTimer=0;
+
+// Rolling 30-frame window buffer and embedded inference state
+float rollingWindow[SANKET_WINDOW_FRAMES][SANKET_CHANNEL_COUNT];
+int windowFrameCount = 0;
+SanketPrediction currentPrediction = {"UNKNOWN", 0.0f, 0.0f, false, true};
+char stablePredictionLabel[32] = "UNKNOWN";
+int stableConsecutiveCount = 0;
 
 // Factory defaults are compiled into firmware and never overwritten by a custom layout.
 static const int DEFAULT_TITLE_X=0, DEFAULT_TITLE_Y=0;
@@ -72,11 +80,13 @@ const uint8_t hindiTitleBitmap[] PROGMEM = {
 
 // NEW BLE protocol V1; match these UUIDs in the Android app.
 static const char* BLE_NAME="SanketVaanni-Left";
-static const char* SERVICE_UUID="8f2a1000-7d2b-4c9a-9c4e-6b1e2f000001";
-static const char* DATA_UUID   ="8f2a1001-7d2b-4c9a-9c4e-6b1e2f000001";
-static const char* CONTROL_UUID="8f2a1002-7d2b-4c9a-9c4e-6b1e2f000001";
+static const char* SERVICE_UUID   ="8f2a1000-7d2b-4c9a-9c4e-6b1e2f000001";
+static const char* DATA_UUID      ="8f2a1001-7d2b-4c9a-9c4e-6b1e2f000001";
+static const char* CONTROL_UUID   ="8f2a1002-7d2b-4c9a-9c4e-6b1e2f000001";
+static const char* PREDICTION_UUID="8f2a1003-7d2b-4c9a-9c4e-6b1e2f000001";
 BLECharacteristic* dataChar=nullptr;
 BLECharacteristic* controlChar=nullptr;
+BLECharacteristic* predChar=nullptr;
 
 class ServerCallbacks: public BLEServerCallbacks {
   void onConnect(BLEServer*) override { bleConnected=true; Serial.println("BLE_CLIENT_CONNECTED"); }
@@ -176,6 +186,14 @@ void startBLE() {
   );
   controlChar->setCallbacks(new DisplayControlCallbacks());
   controlChar->setValue("Use JSON set_layout or restore_default");
+
+  predChar=service->createCharacteristic(
+    PREDICTION_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  predChar->addDescriptor(new BLE2902());
+  predChar->setValue("{\"v\":1,\"glove\":\"left\",\"model_v\":\"1.0.0\",\"label\":\"UNKNOWN\",\"status\":\"warming_up\",\"score\":0.0,\"margin\":0.0}");
+
   service->start();
   BLEAdvertising* adv=BLEDevice::getAdvertising();
   adv->addServiceUUID(SERVICE_UUID);
@@ -360,6 +378,71 @@ void sendBLEData() {
   if(bleConnected) dataChar->notify();
 }
 
+void updateInferenceWindow() {
+  // 1. Shift rolling window left by 1 frame
+  for (int t = 0; t < SANKET_WINDOW_FRAMES - 1; t++) {
+    for (int ch = 0; ch < SANKET_CHANNEL_COUNT; ch++) {
+      rollingWindow[t][ch] = rollingWindow[t + 1][ch];
+    }
+  }
+
+  // 2. Normalise current frame and insert at index 29
+  for (int i = 0; i < 5; i++) {
+    rollingWindow[SANKET_WINDOW_FRAMES - 1][i] = normaliseFlexChannel(
+      flexRaw[i],
+      SANKET_CALIB_REST[i],
+      SANKET_CALIB_FULLFLEX[i]
+    );
+  }
+  rollingWindow[SANKET_WINDOW_FRAMES - 1][5] = (float)mpu.AccX;
+  rollingWindow[SANKET_WINDOW_FRAMES - 1][6] = (float)mpu.AccY;
+  rollingWindow[SANKET_WINDOW_FRAMES - 1][7] = (float)mpu.AccZ;
+  rollingWindow[SANKET_WINDOW_FRAMES - 1][8] = (float)mpu.GyroX;
+  rollingWindow[SANKET_WINDOW_FRAMES - 1][9] = (float)mpu.GyroY;
+  rollingWindow[SANKET_WINDOW_FRAMES - 1][10] = (float)mpu.GyroZ;
+
+  if (windowFrameCount < SANKET_WINDOW_FRAMES) {
+    windowFrameCount++;
+    return; // Accumulating full 3.0s window
+  }
+
+  // 3. Extract 99 features
+  float features[SANKET_FEATURE_COUNT];
+  extractFeatures99(rollingWindow, features);
+
+  // 4. Run model inference
+  SanketPrediction raw = runSanketInference(features);
+
+  // 5. Stabilise predictions (debouncing over consecutive windows)
+  if (strcmp(raw.label, stablePredictionLabel) == 0) {
+    stableConsecutiveCount++;
+  } else {
+    stablePredictionLabel[0] = '\0';
+    strncat(stablePredictionLabel, raw.label, sizeof(stablePredictionLabel) - 1);
+    stableConsecutiveCount = 1;
+  }
+
+  if (stableConsecutiveCount >= 2) {
+    currentPrediction = raw;
+  }
+}
+
+void sendBLEPrediction() {
+  if (!predChar) return;
+  char msg[220];
+  snprintf(msg, sizeof(msg),
+    "{\"v\":1,\"glove\":\"%s\",\"model_v\":\"%s\",\"label\":\"%s\",\"status\":\"%s\",\"score\":%.2f,\"margin\":%.2f}",
+    SANKET_MODEL_SIDE,
+    SANKET_MODEL_VERSION,
+    (windowFrameCount < SANKET_WINDOW_FRAMES) ? "UNKNOWN" : currentPrediction.label,
+    (windowFrameCount < SANKET_WINDOW_FRAMES) ? "warming_up" : (currentPrediction.is_valid ? "valid" : "unknown"),
+    currentPrediction.score,
+    currentPrediction.margin
+  );
+  predChar->setValue((uint8_t*)msg, strlen(msg));
+  if (bleConnected) predChar->notify();
+}
+
 void setup() {
   Serial.begin(115200); delay(500);
   Serial.println("\nSANKET VAANNI LEFT GLOVE V11 FINAL");
@@ -406,10 +489,12 @@ void loop() {
       MPUData next=readMPU();
       if(next.AccX!=0 || next.AccY!=0 || next.AccZ!=0) { mpu=next; calculateAngles(mpu); }
     }
+    updateInferenceWindow();
   }
   if(now-batteryTimer>=1000) { batteryTimer=now; readBattery(); }
   if(now-displayTimer>=500) { displayTimer=now; drawIdleScreen(); }
   if(now-bleTimer>=100) { bleTimer=now; sendBLEData(); }
+  if(now-predictionTimer>=200) { predictionTimer=now; sendBLEPrediction(); }
 
   Serial.print("BAT_PIN_V="); Serial.print(batteryPinVoltage,3);
   Serial.print(",BAT_V="); Serial.print(batteryVoltage,2);
@@ -421,6 +506,8 @@ void loop() {
   Serial.print(",TEMP="); Serial.print(mpu.TempC,1);
   Serial.print(",FLEX=");
   for(int i=0;i<5;i++){ if(i) Serial.print(','); Serial.print(flexRaw[i]); }
+  Serial.print(",PRED="); Serial.print(currentPrediction.label);
+  Serial.print(",SCORE="); Serial.print(currentPrediction.score, 2);
   Serial.println();
   delay(5);
 }

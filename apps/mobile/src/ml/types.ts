@@ -430,10 +430,10 @@ export const PREPROCESSING_VERSION = 'glove-window/1';
 /** Frame count every sensor window is resampled to. */
 export const WINDOW_FRAMES = 30;
 
-/** Nominal capture rate the window length assumes, in Hz. */
-export const WINDOW_HZ = 20;
+/** Nominal capture rate the window length assumes, in Hz. (10 Hz = 3.0s window at 30 frames) */
+export const WINDOW_HZ = 10;
 
-/** Window length in milliseconds, derived rather than written down twice. */
+/** Window length in milliseconds, derived rather than written down twice. Exactly 3000 ms. */
 export const WINDOW_MS = Math.round((WINDOW_FRAMES / WINDOW_HZ) * 1000);
 
 /** Defaults for a fresh install. */

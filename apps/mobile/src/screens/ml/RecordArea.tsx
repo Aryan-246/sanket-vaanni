@@ -78,6 +78,8 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
 
   const [side, setSide] = useState<GloveSide>('right');
   const [handContext, setHandContext] = useState<HandContext>('right');
+  const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
+  const [showAllLabelsInReview, setShowAllLabelsInReview] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -90,6 +92,9 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
       ),
     [data.labels, data.languageId],
   );
+
+  const activeLabelId = selectedLabelId ?? labels[0]?.id ?? null;
+  const activeLabel = labels.find((l) => l.id === activeLabelId) ?? null;
 
   /*
    * The progress of the window being recorded. Measured from the timestamps of
@@ -108,6 +113,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const confirmLabel = async (labelId: string | null) => {
     const outcome = await capture.confirm(labelId);
     if (!outcome.ok) setNotice(outcome.reason);
+    setShowAllLabelsInReview(false);
   };
 
   const beginWindow = () => {
@@ -155,6 +161,10 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
           detail="A session is one sitting. Windows from one sitting are near-duplicates, and the split keeps them together when a model is measured."
         >
           <Card style={styles.stack}>
+            <AppText variant="caption" color={palette.textSecondary}>
+              Language Profile: {data.languageId.toUpperCase()}
+            </AppText>
+
             <AppText variant="caption" color={palette.textSecondary}>
               Which glove are you recording from?
             </AppText>
@@ -230,7 +240,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
       {state.phase === 'ready' ? (
         <Section
           label="Record a window"
-          detail={`One window is ${Math.round(target / 100) / 10} seconds of motion. A shorter run is thrown away rather than padded to length.`}
+          detail={`Each window is exactly ${(target / 1000).toFixed(1)} seconds of motion (30 frames @ 10Hz). Select your sign before recording.`}
         >
           {labels.length === 0 ? (
             <EmptyState
@@ -254,19 +264,50 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
             />
           ) : (
             <Card style={styles.stack}>
-              <ActionButton label="Record a window" onPress={beginWindow} icon="scan" />
+              <AppText variant="label">1. Select Target Sign BEFORE Recording</AppText>
+              <View style={styles.buttonRow}>
+                {labels.map((l) => {
+                  const isSelected = l.id === activeLabelId;
+                  return (
+                    <ActionButton
+                      key={l.id}
+                      label={l.text}
+                      tone={isSelected ? 'primary' : 'secondary'}
+                      onPress={() => setSelectedLabelId(l.id)}
+                    />
+                  );
+                })}
+              </View>
+
               <AppText variant="caption" color={palette.textMuted}>
-                You will be asked which sign it was straight afterwards. Nothing is saved under a
-                guessed name.
+                Selected: {activeLabel ? `“${activeLabel.text}”` : 'None selected'}. You will see this sign throughout the 3.0s recording.
               </AppText>
+
+              <AppText variant="label">2. Record 3.0s Sensor Window</AppText>
+              <ActionButton
+                label={activeLabel ? `Record “${activeLabel.text}” (3.0s)` : 'Select a sign above to record'}
+                disabled={!activeLabel}
+                onPress={beginWindow}
+                icon="scan"
+                tone="primary"
+              />
             </Card>
           )}
         </Section>
       ) : null}
 
       {state.phase === 'recording' ? (
-        <Section label="Recording">
-          <Card style={styles.stack}>
+        <Section label="Recording in progress">
+          <Card style={styles.stack} accentBorder>
+            <View style={styles.headRow}>
+              <AppText variant="title">
+                Target Sign: {activeLabel ? activeLabel.text : 'Selected Sign'}
+              </AppText>
+            </View>
+            <AppText variant="caption" color={palette.textSecondary}>
+              Hold or perform the sign with the {side === 'left' ? 'Left' : 'Right'} glove. Window matches embedded 30-frame live inference.
+            </AppText>
+
             <Meter
               testID="capture-progress"
               value={target === 0 ? null : elapsed / target}
@@ -274,8 +315,8 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               unknown="Waiting for the first reading."
             />
             <AppText variant="caption" color={palette.textMuted}>
-              ${state.frames} reading{state.frames === 1 ? '' : 's'} received so far, at the
-              transport's own rate. The progress above is measured from their timestamps.
+              {state.frames} incoming reading{state.frames === 1 ? '' : 's'} received so far, at the
+              transport's own rate.
             </AppText>
             <View style={styles.buttonRow}>
               <ActionButton
@@ -295,43 +336,70 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
 
       {state.phase === 'awaiting-label' ? (
         <Section
-          label="What was that?"
-          detail="The window is already stored. This answer is what decides whether it can be trained on."
+          label="Review Captured Window"
+          detail="Review the window and explicitly save under your target sign or discard."
         >
           <Card style={styles.stack} accentBorder>
+            <View style={styles.headRow}>
+              <AppText variant="title">
+                Recorded: {activeLabel ? `“${activeLabel.text}”` : 'Captured Window'}
+              </AppText>
+            </View>
+
             {state.qualityNote !== null ? (
               <NoteCard tone="warning">{state.qualityNote}</NoteCard>
             ) : (
               <AppText variant="caption" color={palette.textMuted}>
                 {state.pending === null
                   ? 'The window was built.'
-                  : `${state.pending.quality.frameCount} readings across ${Math.round(state.targetMs / 100) / 10} seconds, resampled to a fixed window.`}
+                  : `${state.pending.quality.frameCount} readings across ${(state.targetMs / 1000).toFixed(1)} seconds, resampled to 30 frames.`}
               </AppText>
             )}
 
-            {labels.map((label) => (
-              <ActionButton
-                key={label.id}
-                label={label.text}
-                tone="secondary"
-                onPress={() => { void confirmLabel(label.id); }}
-              />
-            ))}
+            <ActionButton
+              label={activeLabel ? `Confirm & Save “${activeLabel.text}”` : 'Confirm & Save'}
+              tone="primary"
+              onPress={() => { void confirmLabel(activeLabel?.id ?? null); }}
+            />
 
-            <ActionButton
-              label="I am not sure what I just did"
-              tone="ghost"
-              onPress={() => { void confirmLabel(null); }}
-            />
-            <ActionButton
-              label="Throw this window away"
-              tone="danger"
-              onPress={() => setConfirmDiscard(true)}
-            />
-            <AppText variant="caption" color={palette.textMuted}>
-              "Not sure" keeps the motion but files it as unconfirmed. The trainer refuses it, and the
-              library shows it as waiting rather than as one of your signs.
-            </AppText>
+            <View style={styles.buttonRow}>
+              <ActionButton
+                label={showAllLabelsInReview ? 'Hide other signs' : 'Change sign label'}
+                tone="secondary"
+                onPress={() => setShowAllLabelsInReview((v) => !v)}
+              />
+              <ActionButton
+                label="Discard this window"
+                tone="danger"
+                onPress={() => setConfirmDiscard(true)}
+              />
+            </View>
+
+            {showAllLabelsInReview ? (
+              <View style={styles.stack}>
+                <AppText variant="caption" color={palette.textSecondary}>
+                  Choose an alternative sign to file this window under:
+                </AppText>
+                <View style={styles.buttonRow}>
+                  {labels.map((label) => (
+                    <ActionButton
+                      key={label.id}
+                      label={label.text}
+                      tone={label.id === activeLabelId ? 'primary' : 'secondary'}
+                      onPress={() => {
+                        setSelectedLabelId(label.id);
+                        void confirmLabel(label.id);
+                      }}
+                    />
+                  ))}
+                </View>
+                <ActionButton
+                  label="I am not sure what I just did (save unconfirmed)"
+                  tone="ghost"
+                  onPress={() => { void confirmLabel(null); }}
+                />
+              </View>
+            ) : null}
           </Card>
         </Section>
       ) : null}

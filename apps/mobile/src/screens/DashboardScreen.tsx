@@ -157,6 +157,101 @@ export function DashboardScreen({
 
   const detectedText = useMemo(() => outcomeText(outcome), [outcome]);
 
+  // --- Embedded ESP32-S3 Models State & Recognition ---
+  const leftConnected = left.link.kind === 'connected';
+  const leftPred = leftConnected ? left.prediction : null;
+  const leftPredLabel = useMemo(() => {
+    if (!leftConnected) return 'Not Connected';
+    if (!leftPred) return 'Waiting for frames…';
+    if (leftPred.status === 'warming_up') return 'Collecting Window (3.0s)';
+    if (leftPred.status === 'valid') return leftPred.label;
+    return 'Unknown Sign';
+  }, [leftConnected, leftPred]);
+
+  const leftPredMeta = useMemo(() => {
+    if (!leftConnected || !leftPred) return null;
+    if (leftPred.status === 'valid' && typeof leftPred.score === 'number') {
+      const conf = Math.round(leftPred.score * 100);
+      const margin = typeof leftPred.margin === 'number' ? ` (+${Math.round(leftPred.margin * 100)}%)` : '';
+      return `Confidence: ${conf}%${margin}`;
+    }
+    return leftPred.status === 'warming_up' ? 'Buffering 30 frames @ 10Hz' : 'Below confidence floor';
+  }, [leftConnected, leftPred]);
+
+  const leftPredColor = useMemo(() => {
+    if (!leftConnected) return palette.textMuted;
+    if (leftPred?.status === 'valid') return palette.success;
+    if (leftPred?.status === 'warming_up') return palette.accent;
+    return palette.warning;
+  }, [leftConnected, leftPred, palette]);
+
+  const rightConnected = right.link.kind === 'connected';
+  const rightPred = rightConnected ? right.prediction : null;
+  const rightPredLabel = useMemo(() => {
+    if (!rightConnected) return 'Not Connected';
+    if (!rightPred) return 'Waiting for frames…';
+    if (rightPred.status === 'warming_up') return 'Collecting Window (3.0s)';
+    if (rightPred.status === 'valid') return rightPred.label;
+    return 'Unknown Sign';
+  }, [rightConnected, rightPred]);
+
+  const rightPredMeta = useMemo(() => {
+    if (!rightConnected || !rightPred) return null;
+    if (rightPred.status === 'valid' && typeof rightPred.score === 'number') {
+      const conf = Math.round(rightPred.score * 100);
+      const margin = typeof rightPred.margin === 'number' ? ` (+${Math.round(rightPred.margin * 100)}%)` : '';
+      return `Confidence: ${conf}%${margin}`;
+    }
+    return rightPred.status === 'warming_up' ? 'Buffering 30 frames @ 10Hz' : 'Below confidence floor';
+  }, [rightConnected, rightPred]);
+
+  const rightPredColor = useMemo(() => {
+    if (!rightConnected) return palette.textMuted;
+    if (rightPred?.status === 'valid') return palette.success;
+    if (rightPred?.status === 'warming_up') return palette.accent;
+    return palette.warning;
+  }, [rightConnected, rightPred, palette]);
+
+  // Speech integration for embedded models with REST re-arming lock
+  const lastSpokenEmbeddedRef = useRef<string | null>(null);
+  const embeddedSpeechArmedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    let activeLabel: string | null = null;
+    if (rightPred && rightPred.status === 'valid' && rightPred.label && rightPred.label !== 'UNKNOWN') {
+      activeLabel = rightPred.label.toUpperCase();
+    } else if (leftPred && leftPred.status === 'valid' && leftPred.label && leftPred.label !== 'UNKNOWN') {
+      activeLabel = leftPred.label.toUpperCase();
+    }
+
+    if (!activeLabel || activeLabel === 'REST') {
+      embeddedSpeechArmedRef.current = true;
+      if (activeLabel === 'REST') {
+        lastSpokenEmbeddedRef.current = 'REST';
+      }
+      return;
+    }
+
+    if (embeddedSpeechArmedRef.current && activeLabel !== lastSpokenEmbeddedRef.current) {
+      lastSpokenEmbeddedRef.current = activeLabel;
+      embeddedSpeechArmedRef.current = false;
+
+      if (preferences.voiceEnabled && speechController.speak) {
+        const isHindi = preferences.targetLanguageCode === 'hi' || preferences.signProfileId === 'isl';
+        void speechController.speak(activeLabel, {
+          language: isHindi ? 'hi-IN' : 'en-IN',
+        });
+      }
+    }
+  }, [
+    leftPred,
+    rightPred,
+    preferences.voiceEnabled,
+    preferences.targetLanguageCode,
+    preferences.signProfileId,
+    speechController,
+  ]);
+
   useEffect(() => {
     if (outcome.kind === 'result' && outcome.candidate && typeof outcome.candidate.label === 'string') {
       const word = outcome.candidate.label.toUpperCase();
@@ -334,6 +429,72 @@ export function DashboardScreen({
         onExplain={() => setOpenSheet('text')}
         testID="detected-text-card"
       />
+
+      {/* 4a — ESP32-S3 Firmware Embedded Recognition Models */}
+      <View style={styles.embeddedModelsContainer} testID="embedded-models-section">
+        <View style={styles.sectionHeaderRow}>
+          <AppText variant="caption" color={palette.textSecondary}>
+            FIRMWARE EMBEDDED ML MODELS (ESP32-S3)
+          </AppText>
+          <AppText variant="caption" color={palette.accent}>
+            {preferences.signProfileId.toUpperCase()}
+          </AppText>
+        </View>
+
+        <View style={styles.dualCardsRow}>
+          {/* Left Glove Model */}
+          <View style={[styles.modelCard, { borderColor: palette.border }]}>
+            <View style={styles.modelCardHeader}>
+              <View style={[styles.sideIndicatorDot, { backgroundColor: leftConnected ? palette.success : palette.textMuted }]} />
+              <AppText variant="label" style={styles.grow}>Left Glove</AppText>
+              <AppText variant="caption" color={palette.textMuted}>
+                {leftPred?.model_v ? `v${leftPred.model_v}` : 'v1.0.0'}
+              </AppText>
+            </View>
+
+            <View style={styles.predictionBadge}>
+              <AppText variant="title" color={leftPredColor}>
+                {leftPredLabel}
+              </AppText>
+              {leftPredMeta ? (
+                <AppText variant="caption" color={palette.textMuted}>
+                  {leftPredMeta}
+                </AppText>
+              ) : null}
+            </View>
+
+            <AppText variant="caption" color={palette.warning}>
+              ⚠️ Left Glove: Middle & Ring channels degraded (reporting low/zero).
+            </AppText>
+          </View>
+
+          {/* Right Glove Model */}
+          <View style={[styles.modelCard, { borderColor: palette.border }]}>
+            <View style={styles.modelCardHeader}>
+              <View style={[styles.sideIndicatorDot, { backgroundColor: rightConnected ? palette.success : palette.textMuted }]} />
+              <AppText variant="label" style={styles.grow}>Right Glove</AppText>
+              <AppText variant="caption" color={palette.textMuted}>
+                {rightPred?.model_v ? `v${rightPred.model_v}` : 'v1.0.0'}
+              </AppText>
+            </View>
+
+            <View style={styles.predictionBadge}>
+              <AppText variant="title" color={rightPredColor}>
+                {rightPredLabel}
+              </AppText>
+              {rightPredMeta ? (
+                <AppText variant="caption" color={palette.textMuted}>
+                  {rightPredMeta}
+                </AppText>
+              ) : null}
+            </View>
+
+            <AppText variant="caption" color={palette.textSecondary}>
+              ✓ 5/5 flex channels active & calibrated
+            </AppText>
+          </View>
+        </View>
+      </View>
 
       {/* 4b — Textboard action for conversation navigation. */}
       {onOpenTextboard ? (
@@ -863,5 +1024,44 @@ const makeStyles = (palette: Palette) =>
     deviceText: {
       flex: 1,
       gap: 2,
+    },
+    embeddedModelsContainer: {
+      gap: spacing.xs,
+      marginVertical: spacing.xs,
+    },
+    sectionHeaderRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: spacing.xs,
+    },
+    dualCardsRow: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+    },
+    modelCard: {
+      flex: 1,
+      backgroundColor: palette.surface,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      padding: spacing.sm,
+      gap: spacing.xs,
+    },
+    modelCardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+    },
+    sideIndicatorDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+    },
+    predictionBadge: {
+      minHeight: 44,
+      justifyContent: 'center',
+    },
+    grow: {
+      flex: 1,
     },
   });

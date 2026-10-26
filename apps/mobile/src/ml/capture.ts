@@ -449,28 +449,39 @@ export class CaptureController {
     this.state = { ...this.state, phase: 'saving', error: null };
     this.emit();
 
-    await this.deps.sink.saveSample(sample);
+    try {
+      await this.deps.sink.saveSample(sample);
 
-    const updated: CaptureSessionMeta = {
-      ...session,
-      sampleCount: session.sampleCount + 1,
-    };
+      const updated: CaptureSessionMeta = {
+        ...session,
+        sampleCount: session.sampleCount + 1,
+      };
 
-    this.state = {
-      ...this.state,
-      phase: 'ready',
-      session: updated,
-      pending: null,
-      qualityNote: null,
-      lastSaved: { sampleId: sample.id, labelId: sample.labelId, atMs },
-    };
-    this.emit();
+      this.state = {
+        ...this.state,
+        phase: 'ready',
+        session: updated,
+        pending: null,
+        qualityNote: null,
+        lastSaved: { sampleId: sample.id, labelId: sample.labelId, atMs },
+      };
+      this.emit();
 
-    // The count is written with the window, so the session record cannot claim
-    // more windows than were actually stored.
-    await this.deps.sink.putPendingWindow(null);
-    await this.deps.sink.saveSession(updated);
-    return { ok: true };
+      // The count is written with the window, so the session record cannot claim
+      // more windows than were actually stored.
+      await this.deps.sink.putPendingWindow(null);
+      await this.deps.sink.saveSession(updated);
+      return { ok: true };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Storage write failed';
+      this.state = {
+        ...this.state,
+        phase: 'awaiting-label',
+        error: `Could not save sample: ${reason}`,
+      };
+      this.emit();
+      return { ok: false, reason };
+    }
   }
 
   /**

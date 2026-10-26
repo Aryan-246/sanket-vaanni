@@ -37,6 +37,7 @@ import type {
   Unsubscribe,
 } from './types';
 import type { DataSource } from '../audit/status';
+import type { BlePredictionPayload } from './bleTransport';
 import {
   CalibrationError,
   createDemoCalibration,
@@ -75,6 +76,8 @@ export interface GloveSnapshot {
   readonly available: boolean;
   /** True only when valid, fresh frames are actively arriving from this glove. */
   readonly receivingData?: boolean;
+  /** Embedded model prediction packet received over BLE. */
+  readonly prediction?: BlePredictionPayload | null;
 }
 
 export interface GloveControllerOptions {
@@ -113,6 +116,8 @@ export class GloveController {
   #listeners = new Set<GloveListener>();
   #statusUnsub: Unsubscribe | null = null;
   #sampleUnsub: Unsubscribe | null = null;
+  #predictionUnsub: Unsubscribe | null = null;
+  #prediction: BlePredictionPayload | null = null;
   #staleTimer: ReturnType<typeof setTimeout> | null = null;
   #disposed = false;
   #paused = false;
@@ -133,6 +138,11 @@ export class GloveController {
 
     this.#statusUnsub = transport.onStatusChange(this.#handleStatus);
     this.#sampleUnsub = transport.subscribe(this.#handleSample);
+
+    const maybePred = transport as unknown as { onPrediction?: (fn: (p: BlePredictionPayload) => void) => Unsubscribe };
+    if (typeof maybePred.onPrediction === 'function') {
+      this.#predictionUnsub = maybePred.onPrediction(this.#handlePrediction);
+    }
   }
 
   getCalibration(): CalibrationProfile {
@@ -312,8 +322,11 @@ export class GloveController {
 
     this.#statusUnsub?.();
     this.#sampleUnsub?.();
+    this.#predictionUnsub?.();
     this.#statusUnsub = null;
     this.#sampleUnsub = null;
+    this.#predictionUnsub = null;
+    this.#prediction = null;
 
     const disposable = this.#transport as GloveTransport & { dispose?: () => void };
     disposable.dispose?.();
@@ -343,14 +356,23 @@ export class GloveController {
     } else if (status.kind === 'disconnected' || status.kind === 'idle') {
       this.#raw = null;
       this.#calibrated = null;
+      this.#prediction = null;
       this.#packetCount = 0;
       this.#link = { ...this.#link, ...next };
     } else if (status.kind === 'scanning' || status.kind === 'connecting') {
+      this.#prediction = null;
       this.#link = { ...this.#link, kind: next.kind, reason: null };
     } else if (status.kind === 'unavailable' || status.kind === 'error') {
+      this.#prediction = null;
       this.#link = { ...this.#link, ...next };
     }
 
+    this.#emit(true);
+  };
+
+  #handlePrediction = (pred: BlePredictionPayload): void => {
+    if (this.#disposed) return;
+    this.#prediction = pred;
     this.#emit(true);
   };
 
@@ -451,6 +473,7 @@ export class GloveController {
       synthetic: this.#transport.isSynthetic,
       available: this.#link.kind !== 'unavailable',
       receivingData,
+      prediction: live ? this.#prediction : null,
     };
   }
 }

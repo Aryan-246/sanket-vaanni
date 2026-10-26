@@ -84,6 +84,12 @@ apps/mobile/screenshot_*.png
 /current_screen*.png
 scratch/
 apps/mobile/android/app/src/main/assets/index.android.bundle
+# ---- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
 /package.json
 /package-lock.json
 /SANKET VAANNI/

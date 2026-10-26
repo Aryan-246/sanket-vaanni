@@ -55,8 +55,9 @@ bool batteryPlausible=false;
 bool bleConnected=false;
 unsigned long sensorTimer=0, displayTimer=0, batteryTimer=0, bleTimer=0, predictionTimer=0, pageTimer=0;
 
-// Rolling 30-frame window buffer and embedded inference state
-float rollingWindow[SANKET_WINDOW_FRAMES][SANKET_CHANNEL_COUNT];
+// Rolling 50-frame window buffer (5.0s at 10Hz) and embedded inference state
+#define SANKET_ROLLING_WINDOW_FRAMES 50
+float rollingWindow[SANKET_ROLLING_WINDOW_FRAMES][SANKET_CHANNEL_COUNT];
 int windowFrameCount = 0;
 SanketPrediction currentPrediction = {"UNKNOWN", 0.0f, 0.0f, false, true};
 char stablePredictionLabel[32] = "UNKNOWN";
@@ -380,40 +381,52 @@ void sendBLEData() {
 
 void updateInferenceWindow() {
   // 1. Shift rolling window left by 1 frame
-  for (int t = 0; t < SANKET_WINDOW_FRAMES - 1; t++) {
+  for (int t = 0; t < SANKET_ROLLING_WINDOW_FRAMES - 1; t++) {
     for (int ch = 0; ch < SANKET_CHANNEL_COUNT; ch++) {
       rollingWindow[t][ch] = rollingWindow[t + 1][ch];
     }
   }
 
-  // 2. Normalise current frame and insert at index 29
+  // 2. Normalise current frame and insert at end of rolling window
   for (int i = 0; i < 5; i++) {
-    rollingWindow[SANKET_WINDOW_FRAMES - 1][i] = normaliseFlexChannel(
+    rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][i] = normaliseFlexChannel(
       flexRaw[i],
       SANKET_CALIB_REST[i],
       SANKET_CALIB_FULLFLEX[i]
     );
   }
-  rollingWindow[SANKET_WINDOW_FRAMES - 1][5] = (float)mpu.AccX;
-  rollingWindow[SANKET_WINDOW_FRAMES - 1][6] = (float)mpu.AccY;
-  rollingWindow[SANKET_WINDOW_FRAMES - 1][7] = (float)mpu.AccZ;
-  rollingWindow[SANKET_WINDOW_FRAMES - 1][8] = (float)mpu.GyroX;
-  rollingWindow[SANKET_WINDOW_FRAMES - 1][9] = (float)mpu.GyroY;
-  rollingWindow[SANKET_WINDOW_FRAMES - 1][10] = (float)mpu.GyroZ;
+  rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][5] = (float)mpu.AccX;
+  rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][6] = (float)mpu.AccY;
+  rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][7] = (float)mpu.AccZ;
+  rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][8] = (float)mpu.GyroX;
+  rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][9] = (float)mpu.GyroY;
+  rollingWindow[SANKET_ROLLING_WINDOW_FRAMES - 1][10] = (float)mpu.GyroZ;
 
-  if (windowFrameCount < SANKET_WINDOW_FRAMES) {
+  if (windowFrameCount < SANKET_ROLLING_WINDOW_FRAMES) {
     windowFrameCount++;
-    return; // Accumulating full 3.0s window
+    return; // Accumulating full 5.0s window (50 frames @ 10Hz)
   }
 
-  // 3. Extract 99 features
-  float features[SANKET_FEATURE_COUNT];
-  extractFeatures99(rollingWindow, features);
+  // 3. Resample 50-frame rolling window into 30 frames for extractFeatures99
+  float resampledWindow[SANKET_WINDOW_FRAMES][SANKET_CHANNEL_COUNT];
+  for (int t = 0; t < SANKET_WINDOW_FRAMES; t++) {
+    float srcIdx = (float)t * (float)(SANKET_ROLLING_WINDOW_FRAMES - 1) / (float)(SANKET_WINDOW_FRAMES - 1);
+    int low = (int)srcIdx;
+    int high = (low < SANKET_ROLLING_WINDOW_FRAMES - 1) ? low + 1 : low;
+    float alpha = srcIdx - (float)low;
+    for (int ch = 0; ch < SANKET_CHANNEL_COUNT; ch++) {
+      resampledWindow[t][ch] = rollingWindow[low][ch] * (1.0f - alpha) + rollingWindow[high][ch] * alpha;
+    }
+  }
 
-  // 4. Run model inference
+  // 4. Extract 99 features
+  float features[SANKET_FEATURE_COUNT];
+  extractFeatures99(resampledWindow, features);
+
+  // 5. Run model inference
   SanketPrediction raw = runSanketInference(features);
 
-  // 5. Stabilise predictions (debouncing over consecutive windows)
+  // 6. Stabilise predictions (debouncing over consecutive windows)
   if (strcmp(raw.label, stablePredictionLabel) == 0) {
     stableConsecutiveCount++;
   } else {
@@ -434,8 +447,8 @@ void sendBLEPrediction() {
     "{\"v\":1,\"glove\":\"%s\",\"model_v\":\"%s\",\"label\":\"%s\",\"status\":\"%s\",\"score\":%.2f,\"margin\":%.2f}",
     SANKET_MODEL_SIDE,
     SANKET_MODEL_VERSION,
-    (windowFrameCount < SANKET_WINDOW_FRAMES) ? "UNKNOWN" : currentPrediction.label,
-    (windowFrameCount < SANKET_WINDOW_FRAMES) ? "warming_up" : (currentPrediction.is_valid ? "valid" : "unknown"),
+    (windowFrameCount < SANKET_ROLLING_WINDOW_FRAMES) ? "UNKNOWN" : currentPrediction.label,
+    (windowFrameCount < SANKET_ROLLING_WINDOW_FRAMES) ? "warming_up" : (currentPrediction.is_valid ? "valid" : "unknown"),
     currentPrediction.score,
     currentPrediction.margin
   );

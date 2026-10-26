@@ -329,7 +329,7 @@ export function RootNavigator({
           using it would rip the screen away from an administrator whose profile
           was mid-refresh. The entry point below still requires `canOpenAdmin`,
         */}
-        {detail === 'ml' && isAdmin && <MlScreen onClose={closeDetail} />}
+        {detail === 'ml' && <MlScreen onClose={closeDetail} />}
         {/*
           Guarded the same way as the learning centre above, and for the same
           reason: this screen reads and changes other people's accounts. The
@@ -345,7 +345,7 @@ export function RootNavigator({
         {detail === 'admin' && isAdmin && (
           <AdminScreen
             onClose={closeDetail}
-            onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
+            onOpenMl={() => openDetail('ml')}
             /*
              * So a failure card in the console can offer the action a 401
              * actually needs. Without it the card says the session has expired
@@ -363,7 +363,7 @@ export function RootNavigator({
                 onOpenSettings={() => setTab('more')}
                 onOpenAccount={() => setAccountOpen(true)}
                 onOpenTextboard={() => setTab('textboard')}
-                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
+                onOpenMl={() => openDetail('ml')}
               />
             )}
             {tab === 'oled' && <OledScreen />}
@@ -381,7 +381,7 @@ export function RootNavigator({
                 onOpenAudit={() => openDetail('audit')}
                 onOpenProfile={() => openDetail('profile')}
                 onOpenAbout={() => openDetail('about')}
-                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
+                onOpenMl={() => openDetail('ml')}
                 onOpenAdmin={canOpenAdmin ? () => openDetail('admin') : undefined}
                 onOpenAccount={() => setAccountOpen(true)}
                 initialRecoveryMode={recoveryRequested}

@@ -164,6 +164,8 @@ export interface StartSessionInput {
    * would be the same mistake as reading a label off the motion.
    */
   readonly handContext: HandContext;
+  /** Optional custom window length in ms (defaults to WINDOW_MS = 5000ms). */
+  readonly targetMs?: number;
 }
 
 export class CaptureController {
@@ -225,6 +227,7 @@ export class CaptureController {
       session,
       frames: 0,
       elapsedMs: 0,
+      targetMs: input.targetMs ?? this.state.targetMs ?? WINDOW_MS,
       pending: null,
       qualityNote: null,
       error: null,
@@ -302,7 +305,7 @@ export class CaptureController {
     };
     this.emit();
 
-    if (elapsedMs >= WINDOW_MS) {
+    if (elapsedMs >= this.state.targetMs) {
       void this.finishWindow();
       return true;
     }

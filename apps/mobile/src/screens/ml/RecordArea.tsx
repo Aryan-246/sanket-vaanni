@@ -59,6 +59,12 @@ const HANDS: readonly { value: HandContext; label: string }[] = [
   { value: 'both', label: 'Two-handed' },
 ];
 
+const DURATIONS: readonly { value: '3000' | '5000' | '7000'; label: string }[] = [
+  { value: '3000', label: '3.0s (Fast)' },
+  { value: '5000', label: '5.0s (Recommended)' },
+  { value: '7000', label: '7.0s (Extended)' },
+];
+
 export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void }): React.JSX.Element {
   const styles = useStyles(makeStyles);
   const { palette } = useTheme();
@@ -78,6 +84,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
 
   const [side, setSide] = useState<GloveSide>('right');
   const [handContext, setHandContext] = useState<HandContext>('right');
+  const [durationMsStr, setDurationMsStr] = useState<'3000' | '5000' | '7000'>('5000');
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
   const [showAllLabelsInReview, setShowAllLabelsInReview] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -106,7 +113,8 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
 
   const start = async () => {
     setNotice(null);
-    const outcome = await ml.beginCapture({ side, handContext });
+    const durationMs = Number(durationMsStr);
+    const outcome = await ml.beginCapture({ side, handContext, targetMs: durationMs });
     if (!outcome.ok) setNotice(outcome.reason);
   };
 
@@ -190,6 +198,19 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               says which sensor moved — not which hand you meant to use.
             </AppText>
 
+            <AppText variant="caption" color={palette.textSecondary}>
+              Window duration (recording time)
+            </AppText>
+            <SegmentedControl
+              options={DURATIONS}
+              value={durationMsStr}
+              onChange={setDurationMsStr}
+              accessibilityLabel="Window duration"
+            />
+            <AppText variant="caption" color={palette.textMuted}>
+              A 5.0s window captures complete gesture dynamics (attack, apex hold, and release) with ~50 raw readings for maximum ML training accuracy.
+            </AppText>
+
             {side === 'left' ? (
               <NoteCard tone="warning" testID="left-glove-degraded-warning">
                 Experimental Capture (Left Glove): Middle and Ring channels are currently degraded (reporting low/zero). Capture proceeds using active channels (Thumb, Index, Pinky, Accel, Gyro). Gestures relying on Middle/Ring may have lower precision until hardware repair.
@@ -220,8 +241,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               <AppText variant="caption" color={palette.textMuted}>
                 Filing windows under {session.languageId}, from the{' '}
                 {session.deviceLabel === null ? 'unknown' : session.deviceLabel} transport,
-                calibration version {session.calibrationVersion ?? 'none'}. This build's calibration
-                is version {calibration[side].version}. Every window records which one produced it.
+                calibration version {session.calibrationVersion ?? 'none'}. Target duration is {(target / 1000).toFixed(1)}s per window. Every window records which one produced it.
               </AppText>
             </Row>
             <Row last>
@@ -240,7 +260,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
       {state.phase === 'ready' ? (
         <Section
           label="Record a window"
-          detail={`Each window is exactly ${(target / 1000).toFixed(1)} seconds of motion (30 frames @ 10Hz). Select your sign before recording.`}
+          detail={`Each window is exactly ${(target / 1000).toFixed(1)} seconds of motion (${target >= 5000 ? '~50' : '~30'} raw readings resampled to 30 frames for high accuracy). Select your sign before recording.`}
         >
           {labels.length === 0 ? (
             <EmptyState
@@ -280,12 +300,12 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               </View>
 
               <AppText variant="caption" color={palette.textMuted}>
-                Selected: {activeLabel ? `“${activeLabel.text}”` : 'None selected'}. You will see this sign throughout the 3.0s recording.
+                Selected: {activeLabel ? `“${activeLabel.text}”` : 'None selected'}. Perform the gesture naturally over the {(target / 1000).toFixed(1)}s window.
               </AppText>
 
-              <AppText variant="label">2. Record 3.0s Sensor Window</AppText>
+              <AppText variant="label">2. Record {(target / 1000).toFixed(1)}s Sensor Window</AppText>
               <ActionButton
-                label={activeLabel ? `Record “${activeLabel.text}” (3.0s)` : 'Select a sign above to record'}
+                label={activeLabel ? `Record “${activeLabel.text}” (${(target / 1000).toFixed(1)}s)` : 'Select a sign above to record'}
                 disabled={!activeLabel}
                 onPress={beginWindow}
                 icon="scan"
@@ -305,7 +325,7 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
               </AppText>
             </View>
             <AppText variant="caption" color={palette.textSecondary}>
-              Hold or perform the sign with the {side === 'left' ? 'Left' : 'Right'} glove. Window matches embedded 30-frame live inference.
+              Hold or perform the sign with the {side === 'left' ? 'Left' : 'Right'} glove. Extended ${(target / 1000).toFixed(1)}s window captures full gesture preparation, apex, and release with maximum sensor data for optimal ML accuracy.
             </AppText>
 
             <Meter

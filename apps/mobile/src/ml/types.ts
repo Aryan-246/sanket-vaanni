@@ -425,16 +425,16 @@ export interface MlSettings {
 }
 
 /** The preprocessing version this build writes and understands. */
-export const PREPROCESSING_VERSION = 'glove-window/1';
+export const PREPROCESSING_VERSION = 'glove-window/2';
 
 /** Frame count every sensor window is resampled to. */
 export const WINDOW_FRAMES = 30;
 
-/** Nominal capture rate the window length assumes, in Hz. (10 Hz = 3.0s window at 30 frames) */
+/** Nominal capture rate the window length assumes, in Hz. (10 Hz = 100ms per frame) */
 export const WINDOW_HZ = 10;
 
-/** Window length in milliseconds, derived rather than written down twice. Exactly 3000 ms. */
-export const WINDOW_MS = Math.round((WINDOW_FRAMES / WINDOW_HZ) * 1000);
+/** Window length in milliseconds. Increased to 5000 ms (5.0s) to give ample time for full sign gestures and collect maximum data for high ML accuracy. */
+export const WINDOW_MS = 5000;
 
 /** Defaults for a fresh install. */
 export const DEFAULT_ML_SETTINGS: MlSettings = {

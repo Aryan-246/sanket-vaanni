@@ -283,6 +283,7 @@ export class MlCentre {
   async beginCapture(input: {
     readonly side: GloveSide;
     readonly handContext: HandContext;
+    readonly targetMs?: number;
   }): Promise<{ ok: true } | { ok: false; reason: string }> {
     const info = this.deps.gloveInfo(input.side);
     if (!info.connected) {
@@ -305,6 +306,7 @@ export class MlCentre {
       deviceLabel: info.transportName,
       calibrationVersion: info.calibrationVersion,
       handContext: input.handContext,
+      targetMs: input.targetMs,
     };
 
     await this.capture.startSession(session);

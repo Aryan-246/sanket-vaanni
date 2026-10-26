@@ -154,10 +154,25 @@ describe('Embedded BLE Prediction and 3.0s Capture Tests', () => {
       return { capture, sink };
     }
 
-    it('initializes with exact 3.0s window duration (3000ms)', () => {
+    it('initializes with extended 5.0s window duration (5000ms)', () => {
       const { capture } = makeCapture();
-      expect(capture.getSnapshot().targetMs).toBe(3000);
+      expect(capture.getSnapshot().targetMs).toBe(5000);
       expect(capture.getSnapshot().phase).toBe('idle');
+    });
+
+    it('supports custom window durations (e.g. 3000ms and 7000ms)', async () => {
+      const { capture } = makeCapture();
+      await capture.startSession({
+        languageId: 'isl',
+        modality: 'glove-sensor',
+        source: 'glove',
+        side: 'right',
+        deviceLabel: 'SanketVaanni-Right',
+        calibrationVersion: 1,
+        handContext: 'right',
+        targetMs: 3000,
+      });
+      expect(capture.getSnapshot().targetMs).toBe(3000);
     });
 
     it('preserves awaiting-label state when saveSample throws an error', async () => {
@@ -177,8 +192,8 @@ describe('Embedded BLE Prediction and 3.0s Capture Tests', () => {
 
       capture.beginWindow();
 
-      // Push 35 frames with > 3000ms elapsed
-      for (let i = 0; i < 35; i++) {
+      // Push 55 frames with > 5000ms elapsed (at 100ms per frame)
+      for (let i = 0; i < 55; i++) {
         capture.pushFrame({
           side: 'left',
           timestampMs: 1000 + i * 100,
@@ -222,7 +237,7 @@ describe('Embedded BLE Prediction and 3.0s Capture Tests', () => {
 
       capture.beginWindow();
 
-      for (let i = 0; i < 35; i++) {
+      for (let i = 0; i < 55; i++) {
         capture.pushFrame({
           side: 'right',
           timestampMs: 1000 + i * 100,

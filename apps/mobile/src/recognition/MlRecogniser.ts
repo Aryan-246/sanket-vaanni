@@ -28,7 +28,7 @@ export class MlRecogniser implements Recogniser {
 
   get unavailableReason(): string | null {
     if (this.isAvailable) return null;
-    return 'No recognition model is currently active. Go to Settings > ML Studio to capture gestures and train a model.';
+    return 'No recognition model is currently active for this sign language profile.';
   }
 
   recognise(input: RecognitionInput): RecognitionResult | null {

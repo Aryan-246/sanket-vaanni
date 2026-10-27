@@ -208,7 +208,7 @@ export function RootNavigator({
   const closeDetail = useCallback(() => setDetail(null), []);
 
   useEffect(() => {
-    if (isReady && !isAdmin && (detail === 'admin' || (process?.env?.NODE_ENV === 'test' && detail === 'ml'))) {
+    if (isReady && !isAdmin && (detail === 'admin' || detail === 'ml')) {
       setDetail(null);
     }
   }, [isReady, isAdmin, detail]);
@@ -327,8 +327,8 @@ export function RootNavigator({
         {detail === 'audit' && <AuditScreen onClose={closeDetail} />}
         {detail === 'profile' && <ProfileScreen onClose={closeDetail} />}
         {detail === 'about' && <AboutScreen onClose={closeDetail} />}
-        {detail === 'ml' && (process?.env?.NODE_ENV === 'test' ? isAdmin : true) && <MlScreen onClose={closeDetail} />}
-        {detail === 'admin' && isAdmin && (
+        {detail === 'ml' && canOpenAdmin && <MlScreen onClose={closeDetail} />}
+        {detail === 'admin' && canOpenAdmin && (
           <AdminScreen
             onClose={closeDetail}
             onOpenMl={() => openDetail('ml')}
@@ -343,7 +343,7 @@ export function RootNavigator({
                 onOpenSettings={() => setTab('more')}
                 onOpenAccount={() => setAccountOpen(true)}
                 onOpenTextboard={() => setTab('textboard')}
-                onOpenMl={() => openDetail('ml')}
+                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
               />
             )}
             {tab === 'oled' && <OledScreen />}
@@ -361,7 +361,7 @@ export function RootNavigator({
                 onOpenAudit={() => openDetail('audit')}
                 onOpenProfile={() => openDetail('profile')}
                 onOpenAbout={() => openDetail('about')}
-                onOpenMl={() => openDetail('ml')}
+                onOpenMl={canOpenAdmin ? () => openDetail('ml') : undefined}
                 onOpenAdmin={canOpenAdmin ? () => openDetail('admin') : undefined}
                 onOpenAccount={() => setAccountOpen(true)}
                 initialRecoveryMode={recoveryRequested}

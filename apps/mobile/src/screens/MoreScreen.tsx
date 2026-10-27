@@ -431,9 +431,9 @@ export function MoreScreen({
         />
         {onOpenMl !== undefined && (
           <ListRow
-            label="Learning & Vocabulary"
+            label="[Admin] Learning & Vocabulary"
             value="ML Studio"
-            description="Capture gestures, train 5-word models, and test live inference."
+            description="Admin only: Capture gestures, train models, and publish."
             icon="hand"
             onPress={onOpenMl}
             last={onOpenAdmin === undefined}

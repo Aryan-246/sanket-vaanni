@@ -372,12 +372,12 @@ export function DashboardScreen({
 
       {onOpenMl !== undefined && (
         <ActionButton
-          label="ML Studio: Record & Train Signs"
+          label="[Admin] ML Studio: Train Signs"
           tone="secondary"
           icon="hand"
           onPress={onOpenMl}
-          accessibilityLabel="Open ML Studio"
-          accessibilityHint="Capture sign gestures, train 5-word model, and live inference"
+          accessibilityLabel="Open ML Studio (Admin Only)"
+          accessibilityHint="Admin only: Capture sign gestures, train model, and publish"
         />
       )}
 

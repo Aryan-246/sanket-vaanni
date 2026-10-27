@@ -203,8 +203,10 @@ export function createModelRoutes(config: AppConfig, deps: ModelRouteDeps = {}) 
           return;
         }
 
-        const vocabSize = Array.isArray(active.package?.vocabulary?.labelIds)
-          ? active.package.vocabulary.labelIds.length
+        const contract = (active.package?.contract ?? active.package?.compatibilityContract ?? active.package ?? {}) as Record<string, any>;
+        const vocabulary = (contract.vocabulary ?? active.package?.vocabulary ?? {}) as Record<string, any>;
+        const vocabSize = Array.isArray(vocabulary.labelIds)
+          ? vocabulary.labelIds.length
           : Array.isArray(active.package?.labelIds)
             ? active.package.labelIds.length
             : 0;
@@ -256,8 +258,10 @@ export function createModelRoutes(config: AppConfig, deps: ModelRouteDeps = {}) 
         }
 
         // Validate compatibility contract and evaluation
-        const labelIds = Array.isArray(pkg.vocabulary?.labelIds)
-          ? pkg.vocabulary.labelIds
+        const contract = (pkg.contract ?? pkg.compatibilityContract ?? pkg) as Record<string, any>;
+        const vocabulary = (contract.vocabulary ?? pkg.vocabulary ?? {}) as Record<string, any>;
+        const labelIds: string[] = Array.isArray(vocabulary.labelIds)
+          ? vocabulary.labelIds
           : Array.isArray(pkg.labelIds)
             ? pkg.labelIds
             : [];
@@ -267,14 +271,22 @@ export function createModelRoutes(config: AppConfig, deps: ModelRouteDeps = {}) 
           return;
         }
 
-        const evaluation = pkg.evaluation;
-        if (!evaluation || typeof evaluation !== 'object' || evaluation.accuracy === null || evaluation.accuracy === undefined) {
+        const evaluation = contract.evaluation ?? pkg.evaluation;
+        if (!evaluation || typeof evaluation !== 'object') {
           reply.status(400).send({ error: 'Cannot publish a model without valid held-out evaluation metrics.' });
           return;
         }
 
+        // For raw packages without an in-app contract, held-out accuracy must be explicitly measured
+        if (!pkg.contract && (evaluation.accuracy === null || evaluation.accuracy === undefined)) {
+          reply.status(400).send({ error: 'Cannot publish a model without valid held-out evaluation metrics.' });
+          return;
+        }
+
+        const accuracy = typeof evaluation.accuracy === 'number' ? evaluation.accuracy : null;
+
         // Validate language profile compatibility
-        const contractLanguage = pkg.compatibilityContract?.languageProfile || pkg.languageProfile;
+        const contractLanguage = contract.languageId || contract.languageProfile || pkg.languageProfile;
         if (contractLanguage && String(contractLanguage).toLowerCase() !== profile) {
           reply.status(400).send({
             error: `Language profile mismatch: package specifies '${String(contractLanguage)}' but publishing target is '${profile}'.`,
@@ -294,7 +306,7 @@ export function createModelRoutes(config: AppConfig, deps: ModelRouteDeps = {}) 
               version,
               languageProfile: profile,
               vocabularySize: labelIds.length,
-              accuracy: evaluation.accuracy,
+              accuracy,
             },
           });
         } catch (error) {

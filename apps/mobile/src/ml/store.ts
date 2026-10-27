@@ -837,13 +837,56 @@ export class MlStore implements CaptureSink {
    * refused here for having none. So the gate is not applied, and the record says
    * so instead of implying the version passed it.
    */
+  /**
+   * Ensures labels defined in a model package's vocabulary are present in local labels,
+   * associating their human-readable words for display, captions and speech.
+   */
+  async ensureLabelsFromPackage(contract: {
+    readonly languageId: string;
+    readonly vocabulary: {
+      readonly labelIds: readonly string[];
+      readonly labelTexts?: Readonly<Record<string, string>>;
+    };
+  }): Promise<void> {
+    const updatedLabels: LabelDefinition[] = [...this.snapshot.labels];
+    let labelsChanged = false;
+
+    for (const labelId of contract.vocabulary.labelIds) {
+      const existing = updatedLabels.find((l) => l.id === labelId);
+      const textFromPackage = contract.vocabulary.labelTexts?.[labelId];
+
+      if (!existing && textFromPackage) {
+        updatedLabels.push({
+          id: labelId,
+          languageId: contract.languageId,
+          text: textFromPackage,
+          note: null,
+          createdAtMs: this.now(),
+          createdBy: 'user',
+          archivedAtMs: null,
+        });
+        labelsChanged = true;
+      }
+    }
+
+    if (labelsChanged) {
+      await this.storage.setJson(ML_KEYS.labels, updatedLabels);
+      this.patch({ labels: updatedLabels });
+    }
+  }
+
   async importModel(
     payload: unknown,
+    options?: { readonly importLabels?: boolean },
   ): Promise<MlResult<{ summary: ModelSummary; findings: readonly CompatibilityFinding[] }>> {
     const verdict = verifyModelPackage({ package: payload, local: localCapabilities() });
     if (!verdict.ok) return { ok: false, error: verdict.reason };
 
     const contract = verdict.package.contract;
+
+    if (options?.importLabels) {
+      await this.ensureLabelsFromPackage(contract);
+    }
 
     const labelsNotDefinedHere = contract.vocabulary.labelIds.filter(
       (labelId) => !this.snapshot.labels.some((label) => label.id === labelId),

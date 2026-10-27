@@ -592,15 +592,19 @@ export function AppStateProvider({
         const pkg = modelPkgToImport as { contract?: { version?: number; languageId?: string } };
         if (pkg.contract?.languageId !== profile.id) return;
 
-        const targetVersion = pkg.contract?.version ?? 3;
+        const contract = (pkg as any).contract ?? (pkg as any).compatibilityContract ?? pkg;
+        const targetVersion = contract.version ?? 3;
+        const targetFingerprint = contract.vocabulary?.vocabularyFingerprint ?? '';
+        const targetExportedAtMs = (pkg as any).exportedAtMs ?? contract.trainedAtMs ?? 0;
         const currentActive = ml.getSnapshot().activeModel;
 
-        // If the user has a locally trained and active model on this device, preserve it!
+        // If user trained a newer local model on this phone after this package was published, preserve local
         if (
           currentActive !== null &&
           currentActive.languageId === profile.id &&
           currentActive.status === 'active' &&
-          !currentActive.importedFrom
+          !currentActive.importedFrom &&
+          currentActive.trainedAtMs > targetExportedAtMs
         ) {
           console.log(`[PublishedModelSync] Locally trained user model is active (version ${currentActive.version}), preserving.`);
           return;
@@ -610,7 +614,12 @@ export function AppStateProvider({
           currentActive !== null &&
           currentActive.languageId === profile.id &&
           currentActive.status === 'active' &&
-          currentActive.importedFrom?.sourceVersion === targetVersion;
+          currentActive.importedFrom?.sourceVersion === targetVersion &&
+          (!targetFingerprint || currentActive.importedFrom?.vocabularyFingerprint === targetFingerprint);
+
+        if (contract.vocabulary?.labelIds && contract.vocabulary?.labelTexts) {
+          await ml.store.ensureLabelsFromPackage(contract);
+        }
 
         if (isMatchingActive) {
           console.log(`[PublishedModelSync] Active model is already up to date (version ${targetVersion})`);
@@ -622,7 +631,8 @@ export function AppStateProvider({
         const candidate = existingModels.find(
           (m) =>
             m.languageId === profile.id &&
-            m.importedFrom?.sourceVersion === targetVersion,
+            m.importedFrom?.sourceVersion === targetVersion &&
+            (!targetFingerprint || m.importedFrom?.vocabularyFingerprint === targetFingerprint),
         );
 
         if (candidate) {
@@ -630,7 +640,7 @@ export function AppStateProvider({
           await ml.activate(candidate.id);
         } else {
           console.log(`[PublishedModelSync] Importing package for ${profile.id}...`);
-          const importRes = await ml.store.importModel(modelPkgToImport);
+          const importRes = await ml.store.importModel(modelPkgToImport, { importLabels: true });
           if (importRes.ok) {
             console.log(`[PublishedModelSync] Successfully imported, activating: ${importRes.data.summary.id}`);
             await ml.activate(importRes.data.summary.id);

@@ -59,14 +59,14 @@ export class MlRecogniser implements Recogniser {
 
     const vocab = this.profile.vocabulary.find((v) => v.signId === targetLabel.labelId);
     const displayText = vocab?.label ?? targetLabel.text;
-    console.log(`[MlRecogniser Recognized] ${targetLabel.labelId} => "${displayText}" (score: ${targetLabel.score.toFixed(3)})`);
+    const score = typeof targetLabel.score === 'number' && !Number.isNaN(targetLabel.score) ? targetLabel.score : 0;
 
     return {
       profileId: this.profileId,
       candidate: {
         signId: targetLabel.labelId,
         label: displayText,
-        confidence: targetLabel.score,
+        confidence: score,
       },
       timestampMs: Date.now(),
     };

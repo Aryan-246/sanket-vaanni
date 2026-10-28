@@ -384,6 +384,55 @@ export class MlCentre {
     return result;
   }
 
+  /* ------------------------------------------------ shared cloud vocabulary & data */
+
+  async syncSharedVocabulary(options?: { isAdmin?: boolean }): Promise<ReturnType<MlStore['syncSharedVocabulary']>> {
+    const result = await this.store.syncSharedVocabulary(this.store.getSnapshot().languageId, options);
+    this.emit();
+    return result;
+  }
+
+  async createSharedWord(params: {
+    text: string;
+    note: string | null;
+    spokenPhrase?: string | null;
+    deviceAlias?: string;
+    reason?: string;
+    isAdmin?: boolean;
+  }): Promise<ReturnType<MlStore['createSharedWord']>> {
+    const result = await this.store.createSharedWord(params);
+    this.emit();
+    return result;
+  }
+
+  async archiveWord(labelId: string, options?: { reason?: string; isAdmin?: boolean }): Promise<ReturnType<MlStore['archiveLabel']>> {
+    const result = await this.store.archiveLabel(labelId, options);
+    this.emit();
+    return result;
+  }
+
+  async deleteWordPermanently(labelId: string, options?: { reason?: string; isAdmin?: boolean }): Promise<ReturnType<MlStore['deleteLabel']>> {
+    const result = await this.store.deleteLabel(labelId, options);
+    this.emit();
+    return result;
+  }
+
+  async syncSharedTrainingData(): Promise<ReturnType<MlStore['syncSharedTrainingData']>> {
+    const result = await this.store.syncSharedTrainingData(this.store.getSnapshot().languageId);
+    this.emit();
+    return result;
+  }
+
+  async uploadConsentedSamples(options?: {
+    deviceAlias?: string;
+    reason?: string;
+  }): Promise<ReturnType<MlStore['uploadConsentedSamples']>> {
+    return this.store.uploadConsentedSamples({
+      languageId: this.store.getSnapshot().languageId,
+      ...options,
+    });
+  }
+
   /** The context live prediction is fed. Built fresh each time it is needed. */
   private inferenceContext(): {
     model: ModelRecord | null;

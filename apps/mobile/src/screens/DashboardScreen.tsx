@@ -144,9 +144,10 @@ export function DashboardScreen({
 
   useEffect(() => {
     if (detectedText) {
-      const upper = detectedText.toUpperCase();
-      const word = upper.includes(' / ') ? upper.split(' / ')[1]! : upper;
-      if (word !== 'REST' && word !== lastCelebratedWord.current) {
+      const upper = detectedText.toUpperCase().trim();
+      const parts = upper.split(' / ');
+      const word = parts[1]?.trim() || parts[0]?.trim() || upper;
+      if (word && word !== 'REST' && word !== lastCelebratedWord.current) {
         lastCelebratedWord.current = word;
         setCelebrating(true);
         const timer = setTimeout(() => setCelebrating(false), 2400);

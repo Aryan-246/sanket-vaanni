@@ -60,6 +60,15 @@ import { VERSION_UNKNOWN } from '../config/app';
 import { nativeBuildInfo } from '../native/SanketVaanniNative';
 import { runTraining, type TrainingOutcome, type TrainingProgress } from './training';
 import type { CaptureSink, PendingWindow } from './capture';
+import { apiClient } from '../api/client';
+import {
+  createSharedWord as apiCreateSharedWord,
+  deleteSharedWord as apiDeleteSharedWord,
+  fetchSharedTrainingData as apiFetchSharedTrainingData,
+  fetchSharedVocabulary as apiFetchSharedVocabulary,
+  uploadSharedTrainingSamples as apiUploadSharedTrainingSamples,
+  type AdminSharedWord,
+} from '../admin/client';
 import {
   DATASET_VERSION,
   DEFAULT_ML_SETTINGS,
@@ -278,15 +287,210 @@ export class MlStore implements CaptureSink {
     return { ok: true, data: label };
   }
 
-  /** Retires a sign. Existing windows keep pointing at it. */
-  async archiveLabel(labelId: string): Promise<MlResult<LabelDefinition>> {
+  /**
+   * Synchronizes vocabulary with the authoritative backend registry.
+   * Admin devices fetch /admin/vocabulary/:languageProfile.
+   * Normal user / guest devices fetch /vocabulary/:languageProfile.
+   */
+  async syncSharedVocabulary(
+    languageId: string = this.snapshot.languageId,
+    options?: { isAdmin?: boolean },
+  ): Promise<MlResult<readonly LabelDefinition[]>> {
+    try {
+      let serverWords: Array<{
+        wordId: string;
+        text: string;
+        normalizedKey?: string;
+        definition?: string | null;
+        spokenPhrase?: string | null;
+        createdDeviceAlias?: string | null;
+        creatorEmail?: string | null;
+        status?: string;
+        revision?: number;
+        modelVersions?: readonly string[];
+      }> = [];
+
+      if (options?.isAdmin) {
+        const adminRes = await apiFetchSharedVocabulary(languageId);
+        if (adminRes.ok && Array.isArray(adminRes.data.words)) {
+          serverWords = adminRes.data.words.map((w) => ({
+            wordId: w.wordId,
+            text: w.text,
+            normalizedKey: w.normalizedKey,
+            definition: w.definition,
+            spokenPhrase: w.spokenPhrase,
+            createdDeviceAlias: w.createdDeviceAlias,
+            creatorEmail: w.createdByEmail,
+            status: w.status,
+            revision: w.revision,
+            modelVersions: w.modelVersions,
+          }));
+        }
+      }
+
+      if (serverWords.length === 0) {
+        const publicRes = await apiClient.getVocabulary(languageId);
+        if (publicRes.ok && Array.isArray(publicRes.data.words)) {
+          serverWords = publicRes.data.words.map((w) => ({
+            wordId: w.wordId,
+            text: w.text,
+            normalizedKey: w.normalizedKey,
+            definition: w.definition,
+            spokenPhrase: w.spokenPhrase,
+            status: w.status,
+            revision: w.revision,
+            modelVersions: w.modelVersions,
+          }));
+        }
+      }
+
+      if (serverWords.length === 0) {
+        return { ok: true, data: this.snapshot.labels };
+      }
+
+      const local = [...this.snapshot.labels];
+      let changed = false;
+
+      for (const serverWord of serverWords) {
+        const norm = (serverWord.normalizedKey || serverWord.text).trim().toLowerCase();
+        const existingIdx = local.findIndex(
+          (l) => l.languageId === languageId && (l.wordId === serverWord.wordId || l.text.trim().toLowerCase() === norm),
+        );
+
+        if (existingIdx !== -1) {
+          const existing = local[existingIdx]!;
+          const updated: LabelDefinition = {
+            ...existing,
+            text: serverWord.text,
+            note: serverWord.definition ?? existing.note,
+            wordId: serverWord.wordId,
+            definition: serverWord.definition ?? existing.definition,
+            spokenPhrase: serverWord.spokenPhrase ?? existing.spokenPhrase,
+            createdDeviceAlias: serverWord.createdDeviceAlias ?? existing.createdDeviceAlias,
+            creatorEmail: serverWord.creatorEmail ?? existing.creatorEmail,
+            revision: serverWord.revision ?? existing.revision,
+            status: (serverWord.status as any) ?? existing.status,
+            modelVersions: serverWord.modelVersions ?? existing.modelVersions,
+            archivedAtMs: serverWord.status === 'archived' ? (existing.archivedAtMs ?? this.now()) : null,
+          };
+          local[existingIdx] = updated;
+          changed = true;
+        } else {
+          const newLabel: LabelDefinition = {
+            id: serverWord.wordId || this.newId(),
+            languageId,
+            text: serverWord.text,
+            note: serverWord.definition ?? null,
+            createdAtMs: this.now(),
+            createdBy: 'shared',
+            archivedAtMs: serverWord.status === 'archived' ? this.now() : null,
+            wordId: serverWord.wordId,
+            definition: serverWord.definition ?? null,
+            spokenPhrase: serverWord.spokenPhrase ?? null,
+            createdDeviceAlias: serverWord.createdDeviceAlias ?? null,
+            creatorEmail: serverWord.creatorEmail ?? null,
+            revision: serverWord.revision ?? 1,
+            status: (serverWord.status as any) ?? 'collecting',
+            modelVersions: serverWord.modelVersions ?? [],
+          };
+          local.push(newLabel);
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        await this.storage.setJson(ML_KEYS.labels, local);
+        this.patch({ labels: local, error: null });
+      }
+
+      return { ok: true, data: local };
+    } catch (err) {
+      return { ok: false, error: `Failed to synchronize shared vocabulary: ${describe(err)}` };
+    }
+  }
+
+  /**
+   * Creates a shared word on the backend if authorized as admin, then adds it to the local store.
+   */
+  async createSharedWord(params: {
+    text: string;
+    note: string | null;
+    spokenPhrase?: string | null;
+    deviceAlias?: string;
+    reason?: string;
+    isAdmin?: boolean;
+  }): Promise<MlResult<LabelDefinition>> {
+    const trimmed = params.text.trim();
+    if (trimmed.length === 0) {
+      return { ok: false, error: 'A sign needs a name before anything can be recorded under it.' };
+    }
+
+    let serverWord: AdminSharedWord | null = null;
+    if (params.isAdmin) {
+      const res = await apiCreateSharedWord({
+        languageProfile: this.snapshot.languageId,
+        text: trimmed,
+        definition: params.note ?? undefined,
+        spokenPhrase: params.spokenPhrase ?? undefined,
+        createdDeviceAlias: params.deviceAlias ?? undefined,
+        reason: params.reason || `Created shared word "${trimmed}" from ML Studio`,
+      });
+
+      if (!res.ok) {
+        return { ok: false, error: res.error };
+      }
+      serverWord = res.data.word;
+    }
+
+    const label: LabelDefinition = {
+      id: serverWord?.wordId || this.newId(),
+      languageId: this.snapshot.languageId,
+      text: serverWord?.text || trimmed,
+      note: serverWord?.definition || params.note,
+      createdAtMs: this.now(),
+      createdBy: serverWord ? 'shared' : 'user',
+      archivedAtMs: null,
+      wordId: serverWord?.wordId,
+      definition: serverWord?.definition || params.note,
+      spokenPhrase: serverWord?.spokenPhrase || params.spokenPhrase || null,
+      createdDeviceAlias: serverWord?.createdDeviceAlias || params.deviceAlias || null,
+      creatorEmail: serverWord?.createdByEmail || null,
+      revision: serverWord?.revision || 1,
+      status: serverWord?.status || 'collecting',
+      modelVersions: serverWord?.modelVersions || [],
+    };
+
+    const labels = [...this.snapshot.labels, label];
+    await this.storage.setJson(ML_KEYS.labels, labels);
+    this.patch({ labels, error: null });
+    return { ok: true, data: label };
+  }
+
+  /** Retires a sign from active vocabulary. Existing windows keep pointing at it. */
+  async archiveLabel(labelId: string, options?: { reason?: string; isAdmin?: boolean }): Promise<MlResult<LabelDefinition>> {
     const label = this.snapshot.labels.find((entry) => entry.id === labelId);
     if (label === undefined) return { ok: false, error: 'That sign is no longer in the list.' };
     if (label.archivedAtMs !== null) {
       return { ok: false, error: `"${label.text}" has already been retired.` };
     }
 
-    const archived: LabelDefinition = { ...label, archivedAtMs: this.now() };
+    if (options?.isAdmin && label.wordId) {
+      const res = await apiDeleteSharedWord({
+        languageProfile: label.languageId,
+        wordId: label.wordId,
+        permanent: false,
+        reason: options.reason || `Archived word "${label.text}" from active vocabulary`,
+      });
+      if (!res.ok) {
+        return { ok: false, error: res.error };
+      }
+    }
+
+    const archived: LabelDefinition = {
+      ...label,
+      archivedAtMs: this.now(),
+      status: 'archived',
+    };
     const labels = this.snapshot.labels.map((entry) => (entry.id === labelId ? archived : entry));
     await this.storage.setJson(ML_KEYS.labels, labels);
     this.patch({ labels, error: null });
@@ -294,12 +498,24 @@ export class MlStore implements CaptureSink {
   }
 
   /** Permanently deletes a sign and removes all dataset samples recorded under it. */
-  async deleteLabel(labelId: string): Promise<MlResult<void>> {
+  async deleteLabel(labelId: string, options?: { reason?: string; isAdmin?: boolean }): Promise<MlResult<void>> {
     const label = this.snapshot.labels.find((entry) => entry.id === labelId);
     if (label === undefined) return { ok: false, error: 'That sign is no longer in the list.' };
 
+    if (options?.isAdmin && label.wordId) {
+      const res = await apiDeleteSharedWord({
+        languageProfile: label.languageId,
+        wordId: label.wordId,
+        permanent: true,
+        reason: options.reason || `Permanently deleted word "${label.text}"`,
+      });
+      if (!res.ok) {
+        return { ok: false, error: res.error };
+      }
+    }
+
     const samplesToDelete = this.snapshot.headers
-      .filter((entry) => entry.labelId === labelId)
+      .filter((entry) => entry.labelId === labelId || (label.wordId && entry.labelId === label.wordId))
       .map((entry) => entry.id);
 
     if (samplesToDelete.length > 0) {
@@ -313,8 +529,7 @@ export class MlStore implements CaptureSink {
   }
 
   /**
-   * Provisions the canonical 5 starter vocabulary words for the language if no active signs exist.
-   * HELLO, BYE, THANK YOU, YES, NO.
+   * Provisions canonical starter words or synchronizes with shared cloud vocabulary.
    */
   async ensureCanonicalLabels(languageId: string = this.snapshot.languageId): Promise<readonly LabelDefinition[]> {
     const starterWords = [
@@ -350,6 +565,131 @@ export class MlStore implements CaptureSink {
     await this.storage.setJson(ML_KEYS.labels, labels);
     this.patch({ labels, error: null });
     return [...existing, ...created];
+  }
+
+  /**
+   * Downloads consented training samples from the cloud registry and adds any missing
+   * samples to local storage. This enables models to learn from all collected classes across devices!
+   */
+  async syncSharedTrainingData(languageId: string = this.snapshot.languageId): Promise<MlResult<{ downloaded: number; total: number }>> {
+    try {
+      const res = await apiFetchSharedTrainingData(languageId);
+      if (!res.ok) {
+        return { ok: false, error: res.error };
+      }
+
+      const remoteSamples = res.data.samples;
+      let added = 0;
+
+      for (const remote of remoteSamples) {
+        const alreadyHas = this.snapshot.headers.some((h) => h.id === remote.sampleId);
+        if (alreadyHas) continue;
+
+        const matchingLabel = this.snapshot.labels.find(
+          (l) => l.wordId === remote.wordId || l.text.toLowerCase() === remote.label.toLowerCase(),
+        );
+
+        const sample: SensorWindowSample = {
+          id: remote.sampleId,
+          sessionId: `shared-session-${remote.languageProfile}`,
+          ownerId: remote.contributorId,
+          languageId: remote.languageProfile,
+          labelId: matchingLabel?.id ?? remote.wordId,
+          modality: 'glove-sensor',
+          source: 'glove',
+          handContext: remote.gloveSide === 'both' ? 'both' : (remote.gloveSide === 'left' ? 'left' : 'right'),
+          approval: 'approved',
+          quality: {
+            expectedFrames: 30,
+            frameCount: Array.isArray(remote.frames) ? remote.frames.length : 30,
+            maxGapMs: 100,
+            flatChannels: [],
+            outOfRangeChannels: [],
+            ok: remote.qualityState === 'valid',
+          },
+          capturedAtMs: remote.capturedAt ? new Date(remote.capturedAt).getTime() : this.now(),
+          calibrationVersion: 1,
+          preprocessingVersion: 'glove-window/2',
+          datasetVersion: DATASET_VERSION,
+          fingerprint: `shared-${remote.sampleId}`,
+          rejectionReason: null,
+          side: remote.gloveSide === 'left' ? 'left' : 'right',
+          frames: Array.isArray(remote.frames) ? (remote.frames as any) : [],
+          sourceHz: 20,
+        };
+
+        await this.writeSample(sample);
+        added += 1;
+      }
+
+      return {
+        ok: true,
+        data: { downloaded: added, total: this.snapshot.headers.length },
+      };
+    } catch (err) {
+      return { ok: false, error: `Failed to download shared training samples: ${describe(err)}` };
+    }
+  }
+
+  /**
+   * Uploads all locally approved samples for the active language profile to the cloud registry.
+   */
+  async uploadConsentedSamples(options?: {
+    languageId?: string;
+    deviceAlias?: string;
+    reason?: string;
+  }): Promise<MlResult<{ uploaded: number; total: number }>> {
+    try {
+      const languageId = options?.languageId ?? this.snapshot.languageId;
+      const { samples } = await this.loadAllSamples();
+
+      const eligible = samples.filter(
+        (s): s is SensorWindowSample =>
+          s.languageId === languageId &&
+          s.modality === 'glove-sensor' &&
+          s.approval === 'approved' &&
+          Array.isArray(s.frames) &&
+          s.frames.length > 0,
+      );
+
+      if (eligible.length === 0) {
+        return { ok: false, error: 'No approved sensor window recordings are available to upload.' };
+      }
+
+      const formatted = eligible.map((s) => {
+        const label = this.snapshot.labels.find((l) => l.id === s.labelId);
+        return {
+          sampleId: s.id,
+          wordId: label?.wordId ?? s.labelId,
+          label: label?.text ?? s.labelId,
+          languageProfile: languageId,
+          capturedAt: new Date(s.capturedAtMs).toISOString(),
+          deviceAlias: options?.deviceAlias || "Admin's Phone",
+          gloveSide: s.side,
+          qualityState: s.quality.ok ? 'valid' : 'degraded',
+          hasConsent: true,
+          frames: s.frames,
+        };
+      });
+
+      const res = await apiUploadSharedTrainingSamples({
+        languageProfile: languageId,
+        samples: formatted,
+        deviceAlias: options?.deviceAlias || "Admin's Phone",
+        reason: options?.reason || `Uploaded ${formatted.length} consented training recordings`,
+      });
+
+      if (!res.ok) {
+        return { ok: false, error: res.error };
+      }
+
+      return {
+        ok: true,
+        data: { uploaded: res.data.uploaded, total: res.data.total },
+      };
+    } catch (err) {
+      return { ok: false, error: `Failed to upload consented training data: ${describe(err)}` };
+    }
   }
 
   /* -------------------------------------------------------------- samples */

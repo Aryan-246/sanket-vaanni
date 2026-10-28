@@ -195,16 +195,17 @@ export interface LabelDefinition {
   /** Free-text note, e.g. which hand shape is meant. */
   readonly note: string | null;
   readonly createdAtMs: number;
-  /**
-   * Always `'user'` today.
-   *
-   * The roadmap requires a vocabulary defined with a Deaf-led reviewer. A label
-   * created inside the app is a working label for this person's own data; it is
-   * not a published vocabulary entry, and the model card says so.
-   */
-  readonly createdBy: 'user';
+  readonly createdBy: 'user' | 'admin' | 'shared';
   /** Set when retired. Archived labels stay attached to their samples. */
   readonly archivedAtMs: number | null;
+  readonly wordId?: string;
+  readonly definition?: string | null;
+  readonly spokenPhrase?: string | null;
+  readonly createdDeviceAlias?: string | null;
+  readonly creatorEmail?: string | null;
+  readonly revision?: number;
+  readonly status?: 'draft' | 'collecting' | 'trained' | 'published' | 'archived';
+  readonly modelVersions?: readonly string[];
 }
 
 /** One capture session. Windows are grouped by it for leakage-safe splitting. */

@@ -51,7 +51,6 @@ import { useAppState, useMaintenanceState } from './AppState';
  * user was reading the audit page. Every screen here persists its own work as it
  * is edited, so switching discards no user work — only scroll position.
  */
-declare const process: { env?: { NODE_ENV?: string } } | undefined;
 
 type Route = 'intro' | 'tabs';
 

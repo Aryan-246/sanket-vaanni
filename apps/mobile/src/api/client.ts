@@ -111,6 +111,29 @@ export interface ModelVersionResponse {
   readonly publishReason?: string | null;
 }
 
+export interface PublicVocabularyWord {
+  readonly wordId: string;
+  readonly text: string;
+  readonly normalizedKey: string;
+  readonly languageProfile: string;
+  readonly definition: string | null;
+  readonly usageNotes: string | null;
+  readonly spokenPhrase: string | null;
+  readonly status: string;
+  readonly sampleCount: number;
+  readonly modelVersions: readonly string[];
+  readonly revision: number;
+  readonly updatedAt: string;
+}
+
+export interface PublicVocabularyResponse {
+  readonly ok: boolean;
+  readonly languageProfile: string;
+  readonly revision: number;
+  readonly updatedAt: string;
+  readonly words: readonly PublicVocabularyWord[];
+}
+
 export const apiClient = {
   /** Liveness check. */
   health(): Promise<ApiResult<HealthResponse>> {
@@ -124,6 +147,11 @@ export const apiClient = {
   getModelVersion(languageProfile: string): Promise<ApiResult<ModelVersionResponse>> {
     return request<ModelVersionResponse>(`/models/version/${encodeURIComponent(languageProfile)}`);
   },
+  /** Retrieves the active published vocabulary words for the given profile. */
+  getVocabulary(languageProfile: string): Promise<ApiResult<PublicVocabularyResponse>> {
+    return request<PublicVocabularyResponse>(`/vocabulary/${encodeURIComponent(languageProfile)}`);
+  },
   baseUrl: config.apiBaseUrl,
   isConfigured: config.isApiConfigured,
 } as const;
+

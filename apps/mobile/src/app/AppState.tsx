@@ -422,17 +422,26 @@ export function AppStateProvider({
   }
   const ml = mlRef.current;
 
-  const [mlTick, setMlTick] = useState(0);
+  const [activeModelKey, setActiveModelKey] = useState<string | null>(() => {
+    const active = ml.getSnapshot().activeModel;
+    return active ? `${active.id}:${active.status}` : null;
+  });
+
+  const lastKeyRef = useRef(activeModelKey);
   useEffect(() => {
     return ml.subscribe(() => {
-      setMlTick((t) => t + 1);
+      const active = ml.getSnapshot().activeModel;
+      const key = active ? `${active.id}:${active.status}` : null;
+      if (key !== lastKeyRef.current) {
+        lastKeyRef.current = key;
+        setActiveModelKey(key);
+      }
     });
   }, [ml]);
 
   const recogniser = useMemo(() => {
-    if (mlTick < 0) return null as never;
     return new MlRecogniser(profile, ml);
-  }, [profile, ml, mlTick]);
+  }, [profile, ml]);
   /**
    * The device's own speech engine where one exists, otherwise a speaker that
    * says why it cannot speak. Chosen at runtime, because whether a phone can
@@ -739,8 +748,8 @@ export function AppStateProvider({
       push,
       ml,
       translator,
-      recognitionAvailable: mlTick >= 0 && recogniser.isAvailable,
-      recognitionUnavailableReason: mlTick >= 0 ? recogniser.unavailableReason : null,
+      recognitionAvailable: activeModelKey !== null && recogniser.isAvailable,
+      recognitionUnavailableReason: recogniser.unavailableReason,
     }),
     [
       activeStorage,
@@ -761,7 +770,7 @@ export function AppStateProvider({
       announcements,
       push,
       ml,
-      mlTick,
+      activeModelKey,
       translator,
     ],
   );

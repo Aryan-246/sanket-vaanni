@@ -18,6 +18,7 @@
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { useAccountSafe } from '../../account/AccountProvider';
 import { AppText } from '../../components/AppText';
 import { ActionButton } from '../../components/ActionButton';
 import { Badge, type BadgeTone } from '../../components/Badge';
@@ -58,13 +59,20 @@ export function DatasetArea(): React.JSX.Element {
   const { palette } = useTheme();
   const ml = useMl();
   const data = useMlData();
+  const account = useAccountSafe();
+  const isAdmin = account?.isAdmin ?? false;
 
   const [newSign, setNewSign] = useState('');
   const [newSignNote, setNewSignNote] = useState('');
+  const [newSignSpoken, setNewSignSpoken] = useState('');
   const [signError, setSignError] = useState<string | null>(null);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
+  const [syncingCloud, setSyncingCloud] = useState(false);
+  const [uploadingSamples, setUploadingSamples] = useState(false);
   const [openSample, setOpenSample] = useState<SampleHeader | null>(null);
   const [deleting, setDeleting] = useState<SampleHeader | null>(null);
-  const [deletingLabel, setDeletingLabel] = useState<LabelDefinition | null>(null);
+  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<LabelDefinition | null>(null);
+  const [permanentDeleteReason, setPermanentDeleteReason] = useState('');
   const [busy, setBusy] = useState(false);
 
   const summary = ml.store.summary();
@@ -89,20 +97,93 @@ export function DatasetArea(): React.JSX.Element {
 
   const thin = thinClasses(summary, signs, data.settings.activation.minSamplesPerClass);
 
+  const syncWithCloud = async () => {
+    setSyncingCloud(true);
+    setCloudNotice(null);
+    setSignError(null);
+    const vocabRes = await ml.syncSharedVocabulary({ isAdmin });
+    let msg = '';
+    if (vocabRes.ok) {
+      msg = `Synchronized ${vocabRes.data.length} vocabulary signs.`;
+    }
+    if (isAdmin) {
+      const dataRes = await ml.syncSharedTrainingData();
+      if (dataRes.ok) {
+        msg += ` Downloaded ${dataRes.data.downloaded} shared recordings (total: ${dataRes.data.total}).`;
+      }
+    }
+    setSyncingCloud(false);
+    setCloudNotice(msg || 'Vocabulary synchronized from server.');
+  };
+
+  const uploadRecordingsToCloud = async () => {
+    setUploadingSamples(true);
+    setCloudNotice(null);
+    setSignError(null);
+    const res = await ml.uploadConsentedSamples({
+      deviceAlias: "Admin's Phone",
+      reason: 'Uploaded consented training samples from ML Studio',
+    });
+    setUploadingSamples(false);
+    if (res.ok) {
+      setCloudNotice(`Successfully uploaded ${res.data.uploaded} recordings to cloud dataset!`);
+    } else {
+      setSignError(res.error);
+    }
+  };
+
   const createSign = async () => {
     setSignError(null);
-    const outcome = await ml.store.createLabel(newSign.trim(), newSignNote.trim() || null);
+    setCloudNotice(null);
+    const outcome = await ml.createSharedWord({
+      text: newSign.trim(),
+      note: newSignNote.trim() || null,
+      spokenPhrase: newSignSpoken.trim() || null,
+      deviceAlias: "Admin's Phone",
+      isAdmin,
+    });
     if (!outcome.ok) {
       setSignError(outcome.error);
       return;
     }
     setNewSign('');
     setNewSignNote('');
+    setNewSignSpoken('');
+    setCloudNotice(`"${outcome.data.text}" created and synchronized!`);
   };
 
-  const archive = async (labelId: string) => {
-    const outcome = await ml.store.archiveLabel(labelId);
-    setSignError(outcome.ok ? null : outcome.error);
+  const archive = async (label: LabelDefinition) => {
+    setSignError(null);
+    setCloudNotice(null);
+    const outcome = await ml.archiveWord(label.id, {
+      isAdmin,
+      reason: `Archived word "${label.text}" from active vocabulary`,
+    });
+    if (!outcome.ok) {
+      setSignError(outcome.error);
+    } else {
+      setCloudNotice(`Archived "${label.text}". Older models and samples remain preserved.`);
+    }
+  };
+
+  const executePermanentDelete = async () => {
+    if (!permanentDeleteTarget) return;
+    setBusy(true);
+    setSignError(null);
+    setCloudNotice(null);
+    const outcome = await ml.deleteWordPermanently(permanentDeleteTarget.id, {
+      isAdmin,
+      reason: permanentDeleteReason.trim() || `Permanently deleted word "${permanentDeleteTarget.text}"`,
+    });
+    setBusy(false);
+    const deletedWordText = permanentDeleteTarget.text;
+    setPermanentDeleteTarget(null);
+    setPermanentDeleteReason('');
+    if (!outcome.ok) {
+      setSignError(outcome.error);
+    } else {
+      setCloudNotice(`Permanently deleted "${deletedWordText}".`);
+    }
   };
 
   const relabel = async (sampleId: string, labelId: string) => {
@@ -128,14 +209,6 @@ export function DatasetArea(): React.JSX.Element {
     if (!outcome.ok) setSignError(outcome.error);
   };
 
-  const deleteSign = async (labelId: string) => {
-    setBusy(true);
-    const outcome = await ml.store.deleteLabel(labelId);
-    setBusy(false);
-    setDeletingLabel(null);
-    if (!outcome.ok) setSignError(outcome.error);
-  };
-
   const labelOf = (labelId: string) => data.labels.find((label) => label.id === labelId) ?? null;
 
   return (
@@ -143,6 +216,12 @@ export function DatasetArea(): React.JSX.Element {
       {signError !== null ? (
         <NoteCard tone="warning" testID="dataset-error">
           {signError}
+        </NoteCard>
+      ) : null}
+
+      {cloudNotice !== null ? (
+        <NoteCard tone="success" testID="dataset-cloud-notice">
+          {cloudNotice}
         </NoteCard>
       ) : null}
 
@@ -162,9 +241,35 @@ export function DatasetArea(): React.JSX.Element {
 
       <Section
         label="Signs & Vocabulary"
-        detail="Define or remove signs. You can delete incorrect words or their dataset samples anytime."
+        detail="Define or manage signs. Shared words synchronize across all authorized admin devices automatically."
+        accessory={
+          <ActionButton
+            label={syncingCloud ? 'Syncing...' : 'Sync Cloud'}
+            tone="secondary"
+            compact
+            busy={syncingCloud}
+            onPress={() => { void syncWithCloud(); }}
+          />
+        }
       >
         <Card style={styles.stack}>
+          <View style={styles.headRow}>
+            <ActionButton
+              label={syncingCloud ? 'Syncing...' : 'Sync Cloud Words & Data'}
+              tone="primary"
+              busy={syncingCloud}
+              onPress={() => { void syncWithCloud(); }}
+            />
+            {isAdmin && windows.filter((w) => w.approval === 'approved').length > 0 ? (
+              <ActionButton
+                label={uploadingSamples ? 'Uploading...' : 'Upload Consented Recordings'}
+                tone="secondary"
+                busy={uploadingSamples}
+                onPress={() => { void uploadRecordingsToCloud(); }}
+              />
+            ) : null}
+          </View>
+
           <TextField
             label="New sign"
             value={newSign}
@@ -176,8 +281,15 @@ export function DatasetArea(): React.JSX.Element {
             label="Note (optional)"
             value={newSignNote}
             onChangeText={setNewSignNote}
-            placeholder="e.g. palm facing down, one movement"
-            hint="Stored on the sign so a later recording session knows what was meant."
+            placeholder="e.g. palm facing down, wave motion"
+            hint="Stored on the sign so a later recording session knows what gesture was meant."
+          />
+          <TextField
+            label="Spoken translation (optional)"
+            value={newSignSpoken}
+            onChangeText={setNewSignSpoken}
+            placeholder="e.g. Hello"
+            hint="Spoken phrase pronounced when this sign is recognised."
           />
           <ActionButton
             label="Define this sign"
@@ -192,58 +304,82 @@ export function DatasetArea(): React.JSX.Element {
             compact
             icon="scan"
             title="No signs defined for this language"
-            body="A window cannot be filed without a name, and this is where the names are made."
+            body="A window cannot be filed without a name. You can load starter words or sync from the cloud registry."
             action={
               <ActionButton
-                label="Load Starter Words"
+                label="Sync / Load Words"
                 tone="primary"
-                onPress={() => { void ml.store.ensureCanonicalLabels(data.languageId); }}
+                onPress={() => { void syncWithCloud(); }}
               />
             }
           />
         ) : (
           <Card style={styles.stack}>
-            {signs.map((label, index) => (
-              <Row key={label.id} last={index === signs.length - 1}>
-                <View style={styles.headRow}>
-                  <AppText variant="label" style={styles.grow}>
-                    {label.text}
-                  </AppText>
-                  <Badge
-                    label={`${summary.perLabel[label.id] ?? 0} confirmed`}
-                    tone={(summary.perLabel[label.id] ?? 0) > 0 ? 'neutral' : 'warning'}
-                  />
-                </View>
-                {label.note !== null ? (
-                  <AppText variant="caption" color={palette.textMuted}>
-                    {label.note}
-                  </AppText>
-                ) : null}
-                <View style={styles.headRow}>
-                  <AppText variant="caption" color={palette.textMuted} style={styles.grow}>
-                    {label.archivedAtMs === null
-                      ? 'In use. Windows can be filed under it.'
-                      : 'Retired. Existing windows keep their label.'}
-                  </AppText>
+            {signs.map((label, index) => {
+              const statusTone: BadgeTone =
+                label.status === 'published'
+                  ? 'success'
+                  : label.status === 'trained'
+                    ? 'neutral'
+                    : label.status === 'archived'
+                      ? 'danger'
+                      : 'warning';
+
+              return (
+                <Row key={label.id} last={index === signs.length - 1}>
                   <View style={styles.headRow}>
-                    {label.archivedAtMs === null ? (
-                      <ActionButton
-                        label="Retire"
-                        tone="ghost"
-                        compact
-                        onPress={() => { void archive(label.id); }}
-                      />
+                    <AppText variant="label" style={styles.grow}>
+                      {label.text}
+                    </AppText>
+                    {label.status ? (
+                      <Badge label={label.status.toUpperCase()} tone={statusTone} />
                     ) : null}
-                    <ActionButton
-                      label="Delete"
-                      tone="danger"
-                      compact
-                      onPress={() => setDeletingLabel(label)}
+                    <Badge
+                      label={`${summary.perLabel[label.id] ?? 0} confirmed`}
+                      tone={(summary.perLabel[label.id] ?? 0) > 0 ? 'neutral' : 'warning'}
                     />
                   </View>
-                </View>
-              </Row>
-            ))}
+                  {label.note !== null ? (
+                    <AppText variant="caption" color={palette.textMuted}>
+                      {label.note}
+                    </AppText>
+                  ) : null}
+                  {label.createdDeviceAlias ? (
+                    <AppText variant="caption" color={palette.textMuted}>
+                      📱 Created on: {label.createdDeviceAlias}
+                    </AppText>
+                  ) : null}
+                  {label.modelVersions && label.modelVersions.length > 0 ? (
+                    <AppText variant="caption" color={palette.success}>
+                      Included in published model: v{label.modelVersions.join(', v')}
+                    </AppText>
+                  ) : null}
+                  <View style={styles.headRow}>
+                    <AppText variant="caption" color={palette.textMuted} style={styles.grow}>
+                      {label.archivedAtMs === null
+                        ? 'In use. Windows can be filed under it.'
+                        : 'Retired / Archived. Historical windows keep their label.'}
+                    </AppText>
+                    <View style={styles.headRow}>
+                      {label.archivedAtMs === null ? (
+                        <ActionButton
+                          label="Archive"
+                          tone="ghost"
+                          compact
+                          onPress={() => { void archive(label); }}
+                        />
+                      ) : null}
+                      <ActionButton
+                        label="Delete..."
+                        tone="danger"
+                        compact
+                        onPress={() => setPermanentDeleteTarget(label)}
+                      />
+                    </View>
+                  </View>
+                </Row>
+              );
+            })}
           </Card>
         )}
 
@@ -447,19 +583,29 @@ export function DatasetArea(): React.JSX.Element {
       />
 
       <ConfirmDialog
-        visible={deletingLabel !== null}
-        title={`Delete “${deletingLabel?.text ?? ''}”?`}
+        visible={permanentDeleteTarget !== null}
+        title={`Permanently delete “${permanentDeleteTarget?.text ?? ''}”?`}
         message={
-          deletingLabel === null
+          permanentDeleteTarget === null
             ? ''
-            : `This will permanently delete the word “${deletingLabel.text}” and remove all recorded dataset samples for it. This action cannot be undone.`
+            : permanentDeleteTarget.modelVersions && permanentDeleteTarget.modelVersions.length > 0
+              ? `This word is included in published model version(s) [${permanentDeleteTarget.modelVersions.join(', ')}]. It CANNOT be permanently deleted because doing so would corrupt past model evaluation history. Please use "Archive" instead.`
+              : `This will permanently delete the word “${permanentDeleteTarget.text}” from the shared cloud vocabulary and local storage. This action is irreversible and recorded in the audit log.`
         }
-        confirmLabel="Delete Word & Data"
-        destructive
+        confirmLabel={
+          permanentDeleteTarget?.modelVersions && permanentDeleteTarget.modelVersions.length > 0
+            ? 'Close'
+            : 'Permanently Delete'
+        }
+        destructive={!(permanentDeleteTarget?.modelVersions && permanentDeleteTarget.modelVersions.length > 0)}
         onConfirm={() => {
-          if (deletingLabel !== null) void deleteSign(deletingLabel.id);
+          if (permanentDeleteTarget?.modelVersions && permanentDeleteTarget.modelVersions.length > 0) {
+            setPermanentDeleteTarget(null);
+          } else {
+            void executePermanentDelete();
+          }
         }}
-        onCancel={() => setDeletingLabel(null)}
+        onCancel={() => setPermanentDeleteTarget(null)}
       />
     </View>
   );

@@ -42,7 +42,6 @@ import { Icon } from '../components/Icon';
 import { IconButton } from '../components/IconButton';
 import { Screen } from '../components/Screen';
 import { SectionHeader } from '../components/SectionHeader';
-import { useAccount } from '../account/AccountProvider';
 import { useAppState, useCaptionsState, useSpeechState } from '../app/AppState';
 import { SOURCE_DESCRIPTION, SOURCE_LABEL, SOURCE_TONE } from '../captions';
 import { findOutputLanguage } from '../app/preferences';
@@ -61,7 +60,6 @@ export function TextboardScreen({ onOpenAccount }: TextboardScreenProps): React.
   const { preferences, captions, speaker: speechSpeaker } = useAppState();
   const captionsState = useCaptionsState();
   const speech = useSpeechState();
-  const account = useAccount();
   const copy = useCopy();
 
   const [draft, setDraft] = useState('');

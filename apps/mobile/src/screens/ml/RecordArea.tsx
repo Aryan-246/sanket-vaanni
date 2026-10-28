@@ -37,7 +37,6 @@ import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
 import { SegmentedControl } from '../../components/SegmentedControl';
 import { TextField } from '../../components/TextField';
-import { useAppState } from '../../app/AppState';
 import { SOURCE_LABEL } from '../../ml';
 import type { HandContext } from '../../ml';
 import type { GloveSide } from '../../sensors/types';
@@ -90,7 +89,6 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const ml = useMl();
   const snapshot = useMlSnapshot();
   const data = useMlData();
-  const { calibration } = useAppState();
 
   const capture = ml.capture;
   const state = snapshot.capture;
@@ -119,7 +117,6 @@ export function RecordArea({ onOpenArea }: { onOpenArea: (area: MlArea) => void 
   const activeLabelId = selectedLabelId ?? labels[0]?.id ?? null;
   const activeLabel = labels.find((l) => l.id === activeLabelId) ?? null;
 
-  const elapsed = state.elapsedMs;
   const target = state.targetMs;
 
   const start = async () => {

@@ -468,3 +468,11 @@ export function useAccount(): AccountValue {
   }
   return value;
 }
+
+/**
+ * Safe version of useAccount that returns null if rendered outside <AccountProvider>.
+ * Useful for components tested in isolation or rendered in preview/sub-trees.
+ */
+export function useAccountSafe(): AccountValue | null {
+  return useContext(AccountContext);
+}

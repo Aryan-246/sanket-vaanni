@@ -127,7 +127,7 @@ async function accessToken(): Promise<string | null> {
 }
 
 async function call<T>(
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: Record<string, unknown>,
   signal?: AbortSignal,
@@ -581,4 +581,160 @@ export function getModelHistory(languageProfile: string): Promise<
 > {
   return call('GET', `/admin/models/history/${encodeURIComponent(languageProfile)}`);
 }
+
+/* ------------------------------------------------ shared vocabulary */
+
+export interface AdminSharedWord {
+  wordId: string;
+  text: string;
+  normalizedKey: string;
+  languageProfile: string;
+  definition: string | null;
+  usageNotes: string | null;
+  spokenPhrase: string | null;
+  createdBy: string;
+  createdByEmail: string | null;
+  createdDeviceAlias: string | null;
+  createdAt: string;
+  updatedBy: string;
+  updatedByEmail: string | null;
+  updatedAt: string;
+  revision: number;
+  sampleCount: number;
+  status: 'draft' | 'collecting' | 'trained' | 'published' | 'archived';
+  modelVersions: string[];
+  history: Array<{
+    action: string;
+    timestamp: string;
+    actorEmail: string | null;
+    details: string;
+  }>;
+}
+
+export interface SharedVocabularyResponse {
+  ok: true;
+  languageProfile: string;
+  revision: number;
+  updatedAt: string;
+  updatedBy: string | null;
+  words: AdminSharedWord[];
+}
+
+export function fetchSharedVocabulary(
+  languageProfile: string,
+): Promise<AdminResult<SharedVocabularyResponse>> {
+  return call('GET', `/admin/vocabulary/${encodeURIComponent(languageProfile)}`);
+}
+
+export function createSharedWord(params: {
+  languageProfile: string;
+  text: string;
+  wordId?: string;
+  definition?: string;
+  usageNotes?: string;
+  spokenPhrase?: string;
+  createdDeviceAlias?: string;
+  status?: string;
+  reason: string;
+}): Promise<AdminResult<{ ok: true; word: AdminSharedWord; revision: number }>> {
+  return call('POST', `/admin/vocabulary/${encodeURIComponent(params.languageProfile)}/word`, {
+    text: params.text,
+    wordId: params.wordId,
+    definition: params.definition,
+    usageNotes: params.usageNotes,
+    spokenPhrase: params.spokenPhrase,
+    createdDeviceAlias: params.createdDeviceAlias,
+    status: params.status,
+    reason: params.reason,
+  });
+}
+
+export function updateSharedWord(params: {
+  languageProfile: string;
+  wordId: string;
+  patch: {
+    text?: string;
+    definition?: string;
+    usageNotes?: string;
+    spokenPhrase?: string;
+    status?: string;
+  };
+  reason: string;
+}): Promise<AdminResult<{ ok: true; word: AdminSharedWord; revision: number }>> {
+  return call(
+    'PUT',
+    `/admin/vocabulary/${encodeURIComponent(params.languageProfile)}/word/${encodeURIComponent(params.wordId)}`,
+    {
+      ...params.patch,
+      reason: params.reason,
+    },
+  );
+}
+
+export function deleteSharedWord(params: {
+  languageProfile: string;
+  wordId: string;
+  permanent?: boolean;
+  reason: string;
+}): Promise<AdminResult<{ ok: true; wordId: string; archived: boolean; deleted: boolean; revision: number }>> {
+  const query = params.permanent ? '?permanent=true' : '';
+  return call(
+    'DELETE',
+    `/admin/vocabulary/${encodeURIComponent(params.languageProfile)}/word/${encodeURIComponent(params.wordId)}${query}`,
+    {
+      reason: params.reason,
+    },
+  );
+}
+
+/* ------------------------------------------- shared consented training data */
+
+export interface AdminSharedSample {
+  sampleId: string;
+  wordId: string;
+  label: string;
+  languageProfile: string;
+  capturedAt: string;
+  contributorId: string;
+  contributorEmail: string | null;
+  deviceAlias: string | null;
+  gloveSide: string;
+  qualityState: string;
+  hasConsent: boolean;
+  frames: any[];
+  uploadedAt: string;
+}
+
+export interface SharedTrainingDataResponse {
+  ok: true;
+  languageProfile: string;
+  revision: number;
+  updatedAt: string;
+  count: number;
+  samples: AdminSharedSample[];
+}
+
+export function fetchSharedTrainingData(
+  languageProfile: string,
+): Promise<AdminResult<SharedTrainingDataResponse>> {
+  return call('GET', `/admin/training-data/${encodeURIComponent(languageProfile)}`);
+}
+
+export function uploadSharedTrainingSamples(params: {
+  languageProfile: string;
+  samples: any[];
+  deviceAlias?: string;
+  reason: string;
+}): Promise<AdminResult<{ ok: true; uploaded: number; total: number; revision: number }>> {
+  return call(
+    'POST',
+    `/admin/training-data/${encodeURIComponent(params.languageProfile)}/samples`,
+    {
+      samples: params.samples,
+      deviceAlias: params.deviceAlias,
+      reason: params.reason,
+    },
+  );
+}
+
 

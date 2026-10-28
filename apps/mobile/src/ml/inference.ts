@@ -127,7 +127,15 @@ export function inferFromFrames(input: InferInput): InferenceOutcome {
   }
 
   const ranked = rank(prediction, model, input.labels);
-  const best = ranked[0]!;
+  const best = ranked[0];
+  if (!best) {
+    return unknown(
+      'unusable-window',
+      'The active model contains no recognizable classes.',
+      model,
+      input,
+    );
+  }
 
   if (best.score < input.settings.unknownScore) {
     return {
